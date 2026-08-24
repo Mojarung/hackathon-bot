@@ -47,6 +47,10 @@ class Settings(BaseSettings):
     llm_model: str = "minimax-m3"
     llm_vision_model: str = "minimax-m3"
     llm_fun_model: str = ""  # humour generator; falls back to llm_model
+    # The conversational agent may sit on another OpenAI-compatible provider
+    # (Featherless, OpenRouter, a local gateway). Blank = same as Ollama above.
+    chat_base_url: str = ""
+    chat_api_key: str = ""
     llm_max_tokens: int = 2048
 
     # GitHub

@@ -28,21 +28,37 @@ class LLMUnavailableError(RuntimeError):
     """Raised when no API key is configured, so callers can degrade gracefully."""
 
 
-@lru_cache(maxsize=4)
-def build_model(model_name: str | None = None) -> OpenAIChatModel:
+@lru_cache(maxsize=8)
+def build_model(
+    model_name: str | None = None,
+    base_url: str | None = None,
+    api_key: str | None = None,
+) -> OpenAIChatModel:
+    """Any OpenAI-compatible endpoint. Defaults to the Ollama Cloud settings."""
     settings = get_settings()
-    if not settings.ollama_api_key:
-        raise LLMUnavailableError("OLLAMA_API_KEY is not set")
+    key = api_key or settings.ollama_api_key
+    if not key:
+        raise LLMUnavailableError("no API key configured for the LLM")
     provider = OpenAIProvider(
-        base_url=settings.ollama_base_url,
-        api_key=settings.ollama_api_key,
+        base_url=base_url or settings.ollama_base_url,
+        api_key=key,
     )
     return OpenAIChatModel(model_name or settings.llm_model, provider=provider)
 
 
 def chat_model() -> OpenAIChatModel:
-    """Tool-calling workhorse for the conversational agent."""
-    return build_model(get_settings().llm_model)
+    """Tool-calling workhorse for the conversational agent.
+
+    Can live on a different provider than the rest: the agent is the part whose
+    tone people actually tune, and the model that suits a blunt persona is not
+    necessarily the one that reads posters best.
+    """
+    settings = get_settings()
+    return build_model(
+        settings.llm_model,
+        settings.chat_base_url or None,
+        settings.chat_api_key or None,
+    )
 
 
 def vision_model() -> OpenAIChatModel:
