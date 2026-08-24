@@ -44,7 +44,7 @@ class Settings(BaseSettings):
     # LLM (Ollama Cloud, OpenAI-compatible surface)
     ollama_api_key: str = ""
     ollama_base_url: str = "https://ollama.com/v1"
-    llm_model: str = "gpt-oss:120b"
+    llm_model: str = "minimax-m3"
     llm_vision_model: str = "minimax-m3"
     llm_fun_model: str = ""  # humour generator; falls back to llm_model
     llm_max_tokens: int = 2048
