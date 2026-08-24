@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from pydantic import BaseModel, Field
 from pydantic_ai import Agent
 
+from hackbot.agent import prompts
 from hackbot.agent.llm import LLMUnavailableError, fun_model, model_settings
 
 log = logging.getLogger(__name__)
@@ -80,7 +81,7 @@ class Advice(BaseModel):
         return f"{self.text} {self.accent}".strip()
 
 
-_INSTRUCTIONS = """\
+DEFAULT_WISDOM_PROMPT = """\
 Ты пишешь ОДИН совет в жанре пародии на мотивационные карточки из соцсетей
 («7 решений, которые изменят твою жизнь»).
 
@@ -186,7 +187,7 @@ async def generate_advice(
         agent = Agent(
             fun_model(),
             output_type=Advice,
-            instructions=_INSTRUCTIONS,
+            instructions=prompts.load("wisdom", DEFAULT_WISDOM_PROMPT),
             # Warm, but not so warm that the two halves stop agreeing grammatically:
             # variety comes from the sampled anchors, not from raw randomness.
             model_settings=model_settings(max_tokens=1024, temperature=0.95),

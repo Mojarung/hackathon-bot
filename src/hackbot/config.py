@@ -63,7 +63,7 @@ class Settings(BaseSettings):
     web_public_url: str = ""
     card_refresh_seconds: int = 60
     sticker_set: str = "mojarung"      # pack the bot sprinkles into the chat
-    sticker_chance: float = 0.10       # 0 disables it entirely
+    sticker_chance: float = 0.25       # 0 disables it entirely
     log_level: str = "INFO"
 
     @property

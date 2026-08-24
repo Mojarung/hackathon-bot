@@ -16,6 +16,7 @@ from zoneinfo import ZoneInfo
 from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
 
+from hackbot.agent import prompts
 from hackbot.agent.llm import chat_model, model_settings, vision_model
 from hackbot.config import get_settings
 from hackbot.db.base import session_scope
@@ -58,7 +59,7 @@ from hackbot.domain.timeutils import (
 
 log = logging.getLogger(__name__)
 
-INSTRUCTIONS = """\
+DEFAULT_PERSONA = """\
 Ты сидишь в чате хакатонной команды и следишь за таймингами. Ты не служба
 поддержки и не ассистент — ты свой в этой компании.
 
@@ -130,9 +131,14 @@ class AgentDeps:
 agent: Agent[AgentDeps, str] = Agent(
     deps_type=AgentDeps,
     output_type=str,
-    instructions=INSTRUCTIONS,
     retries=2,
 )
+
+
+@agent.instructions
+def _persona(ctx: RunContext[AgentDeps]) -> str:
+    """Read from prompts/persona.md on every run, so edits apply immediately."""
+    return prompts.load("persona", DEFAULT_PERSONA)
 
 
 @agent.instructions
