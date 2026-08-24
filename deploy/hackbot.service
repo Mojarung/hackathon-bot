@@ -1,0 +1,35 @@
+[Unit]
+Description=Hackathon timeline bot
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/hackbot
+Environment=PATH=/opt/hackbot/.venv/bin:/usr/local/bin:/usr/bin:/bin
+Environment=PYTHONUNBUFFERED=1
+Environment=HACKBOT_ROOT=/opt/hackbot
+# The venv interpreter is invoked directly rather than through `uv run`: uv wants
+# a writable cache under /root, which ProtectHome quite reasonably forbids, and
+# re-resolving the environment on every restart buys nothing. Dependencies are
+# installed by `uv sync --frozen` at deploy time.
+ExecStart=/opt/hackbot/.venv/bin/python -m hackbot
+Restart=always
+RestartSec=5
+# Long polling reconnects on its own; give it room before systemd gives up.
+StartLimitIntervalSec=300
+StartLimitBurst=10
+
+# The bot only ever writes inside its own directory.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/opt/hackbot/data
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=hackbot
+
+[Install]
+WantedBy=multi-user.target
