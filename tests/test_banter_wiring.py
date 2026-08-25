@@ -172,3 +172,20 @@ async def test_commands_and_short_replies_are_left_alone(bot, dp, monkeypatch) -
     await dp.feed_update(bot, make_message(3, "ок"))
 
     assert not called
+
+
+async def test_caption_of_a_file_never_reaches_the_buffer(bot, dp) -> None:
+    """The rule holds one message later too, not just on the media message itself."""
+    await dp.feed_update(bot, make_message(1, "обычная реплика в чате"))
+    await dp.feed_update(
+        bot,
+        make_message(
+            2,
+            "вот условия хакатона, дедлайн 20 сентября",
+            document=Document(file_id="f", file_unique_id="u"),
+        ),
+    )
+
+    stored = [line.text for line in recent.tail(CHAT_ID, TOPIC_ID, 10)]
+    assert stored == ["обычная реплика в чате"]
+    assert not any("дедлайн" in line for line in stored)

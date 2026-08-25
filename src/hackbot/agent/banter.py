@@ -8,6 +8,7 @@ only when someone actually asks the bot to read them.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from pydantic_ai import Agent
@@ -21,6 +22,9 @@ log = logging.getLogger(__name__)
 
 # A butt-in longer than this is not a butt-in, it is a speech.
 MAX_REPLY_CHARS = 400
+# Nobody asked for this reply, so a slow one is worse than none: it would land
+# under a message the chat scrolled past minutes ago.
+TIMEOUT_SECONDS = 30
 
 
 def build_prompt(
@@ -59,8 +63,9 @@ async def make_banter(
             model_settings=model_settings(max_tokens=1024, temperature=0.9),
             retries=1,
         )
-        result = await agent.run(build_prompt(lines, profiles, bot_name, bot_id))
-    except LLMUnavailableError:
+        async with asyncio.timeout(TIMEOUT_SECONDS):
+            result = await agent.run(build_prompt(lines, profiles, bot_name, bot_id))
+    except (LLMUnavailableError, TimeoutError):
         return None
     except Exception as exc:
         log.warning("banter generation failed: %s", exc)

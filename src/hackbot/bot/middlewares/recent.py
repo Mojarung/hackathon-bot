@@ -13,7 +13,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
 
 from hackbot.bot import recent
-from hackbot.bot.utils import actor_name, message_text, topic_id
+from hackbot.bot.utils import actor_name, has_attachment, message_text, topic_id
 
 
 class RecentMiddleware(BaseMiddleware):
@@ -23,7 +23,10 @@ class RecentMiddleware(BaseMiddleware):
         event: TelegramObject,
         data: dict[str, Any],
     ) -> Any:
-        if isinstance(event, Message) and event.from_user is not None:
+        # A caption belongs to the file it is attached to. Letting it into the
+        # buffer would put it in front of the model on the next message, which
+        # is exactly what skipping media messages is supposed to prevent.
+        if isinstance(event, Message) and event.from_user is not None and not has_attachment(event):
             text = message_text(event)
             if text:
                 recent.record(

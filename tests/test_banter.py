@@ -8,7 +8,8 @@ import pytest
 
 from hackbot.agent.banter import MAX_REPLY_CHARS, build_prompt, clean
 from hackbot.bot import recent
-from hackbot.bot.handlers.banter import _has_attachment, _on_cooldown
+from hackbot.bot.handlers.banter import _on_cooldown
+from hackbot.bot.utils import has_attachment
 
 
 @pytest.fixture(autouse=True)
@@ -124,20 +125,27 @@ def test_prompt_without_profiles_has_no_empty_section() -> None:
 
 def _message(**kwargs) -> SimpleNamespace:
     fields = dict.fromkeys(
-        ("photo", "document", "video", "animation", "audio", "voice", "video_note", "sticker")
+        (
+            "photo", "document", "video", "animation", "audio", "voice",
+            "video_note", "sticker", "paid_media",
+        )
     )
     return SimpleNamespace(**(fields | kwargs))
 
 
 @pytest.mark.parametrize(
-    "field", ["photo", "document", "video", "animation", "audio", "voice", "video_note", "sticker"]
+    "field",
+    [
+        "photo", "document", "video", "animation", "audio", "voice",
+        "video_note", "sticker", "paid_media",
+    ],
 )
 def test_any_attachment_stops_it(field: str) -> None:
-    assert _has_attachment(_message(**{field: object()})) is True
+    assert has_attachment(_message(**{field: object()})) is True
 
 
 def test_plain_text_message_passes() -> None:
-    assert _has_attachment(_message()) is False
+    assert has_attachment(_message()) is False
 
 
 def test_cooldown_window() -> None:

@@ -20,12 +20,13 @@ import time
 from collections import OrderedDict
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message
 
 from hackbot.agent.banter import make_banter
 from hackbot.agent.llm import llm_available
 from hackbot.bot import recent
-from hackbot.bot.utils import message_text, topic_id
+from hackbot.bot.utils import has_attachment, message_text, topic_id
 from hackbot.config import get_settings
 from hackbot.db.base import session_scope
 from hackbot.domain.services import people
@@ -46,21 +47,6 @@ MAX_TRACKED_TOPICS = 500
 Key = tuple[int, int | None]
 
 _last_spoken: OrderedDict[Key, float] = OrderedDict()
-
-
-def _has_attachment(message: Message) -> bool:
-    return any(
-        (
-            message.photo,
-            message.document,
-            message.video,
-            message.animation,
-            message.audio,
-            message.voice,
-            message.video_note,
-            message.sticker,
-        )
-    )
 
 
 def _on_cooldown(key: Key, now: float, seconds: int) -> bool:
@@ -84,7 +70,7 @@ async def maybe_butt_in(message: Message, bot: Bot) -> None:
     settings = get_settings()
     if settings.banter_chance <= 0 or message.from_user is None or message.from_user.is_bot:
         return
-    if _has_attachment(message):
+    if has_attachment(message):
         return
 
     text = message_text(message)
@@ -132,7 +118,13 @@ async def maybe_butt_in(message: Message, bot: Bot) -> None:
         return
 
     log.info("banter in chat %s topic %s", chat_id, thread_id)
-    await message.reply(esc(reply), disable_web_page_preview=True)
+    try:
+        await message.reply(esc(reply), disable_web_page_preview=True)
+    except TelegramAPIError as exc:
+        # Nobody is waiting for this message. A deleted trigger or a muted bot
+        # should not raise out of a handler that was never asked to run.
+        log.info("banter not delivered: %s", exc)
+        return
     recent.record(
         chat_id, thread_id, author=me.full_name or "бот",
         user_id=me.id, text=reply, is_bot=True,

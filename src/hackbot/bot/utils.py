@@ -90,6 +90,29 @@ def collect_attachments(message: Message | None) -> list[Attachment]:
     return out
 
 
+def has_attachment(message: Message | None) -> bool:
+    """Anything the bot would have to fetch to understand.
+
+    Used to keep uninvited paths away from files: documents and photos are read
+    only when someone actually asks the bot to read them.
+    """
+    if message is None:
+        return False
+    return any(
+        (
+            message.photo,
+            message.document,
+            message.video,
+            message.animation,
+            message.audio,
+            message.voice,
+            message.video_note,
+            message.sticker,
+            message.paid_media,
+        )
+    )
+
+
 def message_text(message: Message | None) -> str:
     if message is None:
         return ""

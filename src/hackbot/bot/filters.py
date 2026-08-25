@@ -1,5 +1,9 @@
-"""Custom filters. aiogram ships no mention filter, and media messages put their
-entities in `caption_entities`, which is the trap this module exists to avoid.
+"""Custom filters.
+
+aiogram ships no mention filter, and there are two traps this module exists to
+avoid. Media messages put their entities in `caption_entities`, not `entities`.
+And entity offsets are UTF-16 code units, not Python characters - "🔥 @bot" puts
+the mention at offset 3 while Python sees the @ at index 2.
 """
 
 from __future__ import annotations
@@ -29,7 +33,10 @@ async def mentions_bot(message: Message, bot: Bot) -> bool:
         if ent.type == MessageEntityType.TEXT_MENTION and ent.user and ent.user.id == me.id:
             return True
         if ent.type == MessageEntityType.MENTION and me.username:
-            fragment = text[ent.offset: ent.offset + ent.length].lstrip("@")
+            # extract_from, not a slice: Telegram counts entity offsets in UTF-16
+            # code units, so one emoji anywhere before the @ shifts every index by
+            # one and the mention silently stops matching.
+            fragment = (ent.extract_from(text) or "").lstrip("@")
             if fragment.casefold() == me.username.casefold():
                 return True
     return False
