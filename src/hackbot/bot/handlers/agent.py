@@ -330,10 +330,8 @@ async def _get_thread(session, chat_id: int, thread_id: int | None) -> AgentThre
 
 
 async def _save_thread(session, chat_id: int, thread_id: int | None, payload: bytes) -> None:
-    """Keep the tail only: full history would grow without bound and cost tokens."""
+    """Store the thread. It arrives already trimmed - see agent/history.py."""
     text = payload.decode("utf-8")
-    if len(text) > 60_000:
-        text = ""  # simplest safe truncation - start the conversation fresh
     row = await _get_thread(session, chat_id, thread_id)
     if row is None:
         session.add(AgentThread(chat_id=chat_id, thread_id=thread_id, history=text))

@@ -14,8 +14,9 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from pydantic_ai import Agent, BinaryContent, RunContext
-from pydantic_ai.messages import ModelMessage, ModelMessagesTypeAdapter
+from pydantic_ai.messages import ModelMessage
 
+from hackbot.agent import history as history_store
 from hackbot.agent import prompts
 from hackbot.agent.defaults import DEFAULT_PERSONA
 from hackbot.agent.llm import chat_model, model_settings, vision_model
@@ -23,6 +24,7 @@ from hackbot.config import get_settings
 from hackbot.db.base import session_scope
 from hackbot.db.models import Hackathon
 from hackbot.domain.enums import EventKind, HackStatus, LinkKind
+from hackbot.domain.services import people
 from hackbot.domain.services.events import (
     add_event,
     delete_event,
@@ -96,8 +98,42 @@ def _time_context(ctx: RunContext[AgentDeps]) -> str:
     local = to_local(now_utc(), ctx.deps.tz)
     return (
         f"Сейчас {local:%Y-%m-%d %H:%M} ({WEEKDAYS_FULL[local.weekday()]}), "
-        f"часовой пояс {ctx.deps.tz.key}. Обращается: {ctx.deps.actor or 'участник'}."
+        f"часовой пояс {ctx.deps.tz.key}."
     )
+
+
+@agent.instructions
+async def _who_is_talking(ctx: RunContext[AgentDeps]) -> str:
+    """Who the bot is answering right now, and who else it knows in this chat.
+
+    Injected on every run rather than fetched through a tool: the model has to
+    know whose message it is reading before it decides how to answer, and a tool
+    it can forget to call is not a reliable way to get that.
+    """
+    async with session_scope() as session:
+        me = await people.get(session, ctx.deps.user_id)
+        others = await people.roster(
+            session, chat_id=ctx.deps.chat_id, exclude=ctx.deps.user_id
+        )
+
+    name = me.handle if me else (ctx.deps.actor or "участник")
+    lines = [f"Сейчас пишет: {name}, telegram id {ctx.deps.user_id}."]
+    if me is not None and me.facts:
+        lines.append(f"Что ты о нём знаешь: {me.facts}")
+    else:
+        lines.append("Про него ты пока ничего не знаешь.")
+
+    if others:
+        lines.append("Кого ещё знаешь в этом чате:")
+        lines += [f"- {person.summary()}" for person in others]
+
+    lines.append(
+        "Если человек рассказал о себе или о ком-то устойчивый факт (как звать, "
+        "чем занимается, какой характер) — вызови remember_person и запомни. "
+        "Не выдумывай факты сам и не запоминай сиюминутное настроение. "
+        "Спрашивают про человека — сначала whois."
+    )
+    return "\n".join(lines)
 
 
 async def _load(deps: AgentDeps, session) -> Hackathon | None:
@@ -536,6 +572,69 @@ async def remove_person(ctx: RunContext[AgentDeps], name: str) -> str:
         return f"Убрал {person.display} из команды."
 
 
+# ------------------------------------------------------------ кто есть кто
+
+
+@agent.tool
+async def remember_person(
+    ctx: RunContext[AgentDeps],
+    name: str,
+    about: str | None = None,
+    traits: str | None = None,
+    note: str | None = None,
+    call_them: str | None = None,
+) -> str:
+    """Запомнить факт о человеке. name — @ник, имя или «я» про того, кто пишет.
+
+    about — кто он и чем занимается, traits — характер и манера,
+    note — всё остальное, call_them — как к нему обращаться.
+    Факты дополняют друг друга, старое не стирается.
+    """
+    async with session_scope() as session:
+        person = await people.find(session, name, speaker_id=ctx.deps.user_id)
+        if person is None:
+            return (
+                f"Не знаю, кто такой {name!r}. Он должен хоть раз написать в чат, "
+                "или назови его @ником."
+            )
+        if not any((about, traits, note, call_them)):
+            return "Нечего запоминать: не передано ни одного факта."
+        await people.remember(
+            session, person, about=about, traits=traits, note=note, alias=call_them
+        )
+        return f"Запомнил про {person.display}: {person.facts or person.display}"
+
+
+@agent.tool
+async def whois(ctx: RunContext[AgentDeps], name: str) -> str:
+    """Что известно о человеке. name — @ник, имя или «я» про того, кто пишет."""
+    async with session_scope() as session:
+        person = await people.find(session, name, speaker_id=ctx.deps.user_id)
+        if person is None:
+            return f"Никого похожего на {name!r} в чате не видел."
+        seen = fmt_dt(person.last_seen, ctx.deps.tz)
+        tail = f"Сообщений: {person.messages}, последний раз писал {seen}."
+        if not person.facts:
+            return f"{person.handle} — про него ничего не записано. {tail}"
+        return f"{person.summary()}\n{tail}"
+
+
+@agent.tool
+async def forget_person(ctx: RunContext[AgentDeps], name: str, field: str = "all") -> str:
+    """Стереть записанное о человеке. field: all, about, traits, notes, alias.
+
+    Только по явной просьбе. Сам факт знакомства не стирается.
+    """
+    async with session_scope() as session:
+        person = await people.find(session, name, speaker_id=ctx.deps.user_id)
+        if person is None:
+            return f"Никого похожего на {name!r} не знаю."
+        wiped = await people.forget(session, person, field)
+        if not wiped:
+            return f"Про {person.display} и так ничего не записано."
+        return f"Стёр про {person.display}: {wiped}."
+
+
 # ---------------------------------------------------------------- runner
 
 
@@ -562,15 +661,16 @@ async def run_agent(
         model=model,
         model_settings=model_settings(max_tokens=3072, temperature=0.2),
     )
-    log.info("agent run: %s", result.usage)
-    return result.output, result.all_messages_json()
+    # Trim before persisting, so the next turn starts from something sane no
+    # matter how long this one ran.
+    kept = history_store.trim(result.all_messages())
+    payload = history_store.dump(kept)
+    log.info(
+        "agent run: %s | история: %d сообщ., %d КБ",
+        result.usage, len(kept), len(payload) // 1024,
+    )
+    return result.output, payload
 
 
 def load_history(raw: str | None) -> list[ModelMessage]:
-    if not raw:
-        return []
-    try:
-        return ModelMessagesTypeAdapter.validate_json(raw)
-    except Exception as exc:
-        log.info("dropping unreadable agent history: %s", exc)
-        return []
+    return history_store.load(raw)

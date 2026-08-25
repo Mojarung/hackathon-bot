@@ -9,6 +9,7 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeAllGroupChats
 
+from hackbot.bot.middlewares.identity import IdentityMiddleware
 from hackbot.bot.stickers import install as install_stickers
 from hackbot.config import get_settings
 
@@ -36,6 +37,8 @@ COMMANDS: list[tuple[str, str]] = [
     ("ics", "выгрузить в календарь"),
     ("wisdom", "мудрость дня"),
     ("hacks", "все хакатоны чата"),
+    ("whois", "что бот помнит о человеке"),
+    ("forgetme", "стереть, что бот помнит о тебе"),
     ("help", "справка"),
 ]
 
@@ -63,12 +66,15 @@ def build_dispatcher() -> Dispatcher:
         queries,
         team,
         timeline,
+        who,
     )
 
     dp = Dispatcher()
+    # Outer, so the sender is recorded even for messages no handler wants.
+    dp.message.outer_middleware(IdentityMiddleware())
     # Order matters: the free-form agent router is last, so every slash command
     # and every button wins the routing race before the LLM is ever consulted.
-    for module in (common, intake, manage, timeline, team, media, fun, queries, agent):
+    for module in (common, intake, manage, timeline, team, media, fun, who, queries, agent):
         dp.include_router(module.router)
     return dp
 

@@ -260,3 +260,63 @@ class KV(Base):
     key: Mapped[str] = mapped_column(String(80), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
     updated_at: Mapped[datetime] = mapped_column(default=now_utc, onupdate=now_utc)
+
+
+class ChatUser(Base):
+    """Who the bot is talking to, remembered across topics and hackathons.
+
+    Keyed by the Telegram user id rather than the @username, because a username
+    can be changed or dropped at any moment while the id never moves. The three
+    free-text fields are what the bot learns from conversation; identity and the
+    counters are filled in passively from every message it sees.
+    """
+
+    __tablename__ = "chat_user"
+    __table_args__ = (UniqueConstraint("tg_user_id", name="uq_chat_user_tg"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    tg_user_id: Mapped[int] = mapped_column(BigInteger, index=True)
+    username: Mapped[str | None] = mapped_column(String(64), default=None)
+    full_name: Mapped[str] = mapped_column(String(200), default="")
+    # What the person prefers to be called, when that differs from full_name.
+    alias: Mapped[str | None] = mapped_column(String(80), default=None)
+
+    about: Mapped[str | None] = mapped_column(Text, default=None)   # кто он, чем занимается
+    traits: Mapped[str | None] = mapped_column(Text, default=None)  # характер, манера речи
+    notes: Mapped[str | None] = mapped_column(Text, default=None)   # всё остальное
+
+    chat_id: Mapped[int | None] = mapped_column(BigInteger, default=None)
+    messages: Mapped[int] = mapped_column(Integer, default=0)
+    first_seen: Mapped[datetime] = mapped_column(default=now_utc)
+    last_seen: Mapped[datetime] = mapped_column(default=now_utc)
+
+    @property
+    def display(self) -> str:
+        return self.alias or self.full_name or (f"@{self.username}" if self.username else "аноним")
+
+    @property
+    def handle(self) -> str:
+        """Name plus @username, for lines the model reads."""
+        return f"{self.display} (@{self.username})" if self.username else self.display
+
+    @property
+    def is_known(self) -> bool:
+        """True once the bot has learned something beyond the Telegram identity."""
+        return any((self.about, self.traits, self.notes, self.alias))
+
+    @property
+    def facts(self) -> str:
+        """Everything learned about the person, without repeating their name."""
+        bits = []
+        if self.about:
+            bits.append(self.about)
+        if self.traits:
+            bits.append(f"характер: {self.traits}")
+        if self.notes:
+            bits.append(self.notes)
+        return "; ".join(bits)
+
+    def summary(self) -> str:
+        """One line per person for the roster the agent is given."""
+        facts = self.facts
+        return f"{self.handle} — {facts}" if facts else self.handle
