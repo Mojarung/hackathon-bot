@@ -74,7 +74,7 @@ class Settings(BaseSettings):
 
     # Butting into a conversation nobody invited it to.
     banter_chance: float = 0.25        # per message; 0 disables it entirely
-    banter_cooldown_seconds: int = 300  # per topic, so a burst cannot become a monologue
+    banter_cooldown_seconds: int = 90   # per topic, so a burst cannot become a monologue
     banter_context: int = 8            # how many recent lines it gets to read
     # Covers reactions too. Off means the bot only comes alive in topics with a
     # hackathon, which leaves it mute in General - where most chatter happens.
