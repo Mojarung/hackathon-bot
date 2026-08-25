@@ -25,7 +25,13 @@ from hackbot.bot.handlers._helpers import find_hack, read_attachments, take_ques
 from hackbot.bot.handlers.fun import build_wisdom, random_teammate
 from hackbot.bot.handlers.intake import apply_extracted
 from hackbot.bot.handlers.media import _push_everything
-from hackbot.bot.utils import actor_name, collect_attachments, message_text, topic_id
+from hackbot.bot.utils import (
+    actor_name,
+    collect_attachments,
+    message_text,
+    speaker_label,
+    topic_id,
+)
 from hackbot.config import get_settings
 from hackbot.db.base import session_scope
 from hackbot.db.models import AgentThread, Hackathon
@@ -149,7 +155,11 @@ async def on_mention(message: Message, bot: Bot) -> None:
             pending = await take_questions(session, message.chat.id, topic_id(message))
 
     blocks, warnings = await read_attachments(downloaded)
-    prompt = truncate(text or "Разбери вложение и заполни, что сможешь.", MAX_PROMPT)
+    # Stamp the author onto the turn. Instructions name the current speaker, but
+    # they are rewritten every run - once a turn scrolls into the history it is
+    # this prefix, and only this prefix, that says who said it.
+    said = truncate(text or "Разбери вложение и заполни, что сможешь.", MAX_PROMPT)
+    prompt = f"{speaker_label(message)}: {said}"
     if blocks:
         prompt = "\n\n".join([prompt, *blocks])[:MAX_DOC_PROMPT]
     if pending:

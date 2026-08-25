@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pytest
 
 from hackbot.agent.schemas import ExtractedEvent, ExtractedHackathon, ExtractedLink
 from hackbot.bot.handlers.timeline import _split_title_and_date
+from hackbot.bot.utils import speaker_label
 from hackbot.domain.enums import EventKind, HackStatus
 from hackbot.domain.services.ingest import build_plan
 from hackbot.domain.textutils import find_urls, progress_bar, repo_name, safe_filename, slugify
@@ -348,3 +350,24 @@ def test_placeholder_participants() -> None:
     assert stub.mention_html == "@fsfs192"          # no tg:// link for a made-up id
     assert 'tg://user?id=555' in real.mention_html
     assert placeholder_id("@fsfs192") == placeholder_id("fsfs192")   # stable, handle-agnostic
+
+
+# ---------------------------------------------------------------- кто говорит
+
+
+@pytest.mark.parametrize(
+    ("user", "expected"),
+    [
+        (
+            SimpleNamespace(full_name="Кирилл Т", username="kir_t", id=1),
+            "Кирилл Т (@kir_t)",
+        ),
+        (SimpleNamespace(full_name="Кирилл Т", username=None, id=1), "Кирилл Т"),
+        (SimpleNamespace(full_name="", username="kir_t", id=1), "@kir_t"),
+        (SimpleNamespace(full_name="", username=None, id=42), "42"),
+        (None, "участник"),
+    ],
+)
+def test_speaker_label(user, expected: str) -> None:
+    """The label is what survives into the history, so it has to identify a person."""
+    assert speaker_label(SimpleNamespace(from_user=user)) == expected

@@ -35,6 +35,22 @@ def actor_name(message: Message) -> str:
     return user.full_name or (f"@{user.username}" if user.username else str(user.id))
 
 
+def speaker_label(message: Message) -> str:
+    """Who is speaking, for the transcript the model reads.
+
+    The @username is included when there is one: several people in a chat can
+    share a first name, and the label is the only thing that tells the model
+    apart who said what once a turn has scrolled into the history.
+    """
+    user = message.from_user
+    if not user:
+        return "участник"
+    name = actor_name(message)
+    if user.username and not name.startswith("@"):
+        return f"{name} (@{user.username})"
+    return name or "участник"
+
+
 @dataclass(slots=True)
 class Attachment:
     file_id: str
