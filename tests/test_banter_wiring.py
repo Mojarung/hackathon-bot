@@ -195,3 +195,52 @@ async def test_model_declining_leaves_no_reaction(bot, dp, monkeypatch) -> None:
     await asyncio.sleep(0.05)
 
     assert not [c for c in bot.session.calls if isinstance(c, SetMessageReaction)]
+
+
+async def test_general_topic_is_not_a_second_class_topic(bot, dp, monkeypatch) -> None:
+    """Most chatter happens in General, where no hackathon is ever bound."""
+    spoken, _ = patch_everything(monkeypatch)
+    monkeypatch.setattr(
+        banter_handler.get_settings(), "banter_everywhere", True, raising=False
+    )
+
+    general = Update(
+        update_id=1,
+        message=Message(
+            message_id=1,
+            date=datetime.now(UTC),
+            chat=Chat(id=CHAT_ID, type="supergroup"),
+            from_user=User(id=1, is_bot=False, first_name="Кирилл"),
+            text="кто-нибудь вообще тут живой сегодня",
+        ),
+    )
+    second = Update(
+        update_id=2,
+        message=Message(
+            message_id=2,
+            date=datetime.now(UTC),
+            chat=Chat(id=CHAT_ID, type="supergroup"),
+            from_user=User(id=1, is_bot=False, first_name="Кирилл"),
+            text="ну хоть кто-то отзовитесь уже",
+        ),
+    )
+    await dp.feed_update(bot, general)
+    await dp.feed_update(bot, second)
+
+    assert spoken, "в General бот тоже должен влезать"
+    sent = [c for c in bot.session.calls if isinstance(c, SendMessage)]
+    assert sent and sent[0].message_thread_id is None, "General - это тема без id"
+
+
+async def test_the_escape_hatch_still_narrows_it_to_hackathon_topics(
+    bot, dp, monkeypatch
+) -> None:
+    spoken, _ = patch_everything(monkeypatch)
+    monkeypatch.setattr(
+        banter_handler.get_settings(), "banter_everywhere", False, raising=False
+    )
+
+    await dp.feed_update(bot, make_message(1, "первое сообщение в теме"))
+    await dp.feed_update(bot, make_message(2, "второе сообщение, уже разговор"))
+
+    assert not spoken, "с выключенным флагом молчит там, где нет хакатона"
