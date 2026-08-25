@@ -76,7 +76,7 @@ class Settings(BaseSettings):
     banter_everywhere: bool = False    # by default only topics with a hackathon
 
     # Silent emoji reactions on other people's messages.
-    reaction_chance: float = 0.10      # per message; 0 disables it entirely
+    reaction_chance: float = 0.25      # per message; 0 disables it entirely
     reaction_cooldown_seconds: int = 60  # per topic; reactions are cheap, so shorter
     log_level: str = "INFO"
 

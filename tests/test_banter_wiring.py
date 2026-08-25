@@ -17,7 +17,7 @@ from aiogram.enums import ParseMode
 from aiogram.methods import SendMessage, SetMessageReaction, TelegramMethod
 from aiogram.types import Chat, Document, Message, PhotoSize, Update, User
 
-from hackbot.bot import recent
+from hackbot.bot import reactions, recent
 from hackbot.bot.handlers import banter as banter_handler
 from hackbot.bot.middlewares.recent import RecentMiddleware
 
@@ -75,7 +75,7 @@ def _clean_state():
 def _reset() -> None:
     recent.clear()
     banter_handler._last_spoken.clear()
-    banter_handler._last_reacted.clear()
+    reactions._last_reacted.clear()
 
 
 def patch_everything(monkeypatch, *, reply: str | None = "влезаю", reaction: str | None = None):
@@ -92,8 +92,9 @@ def patch_everything(monkeypatch, *, reply: str | None = "влезаю", reactio
         return reaction
 
     monkeypatch.setattr(banter_handler, "make_banter", fake_banter)
-    monkeypatch.setattr(banter_handler, "pick_reaction", fake_reaction)
+    monkeypatch.setattr(reactions, "pick_reaction", fake_reaction)
     monkeypatch.setattr(banter_handler.random, "random", lambda: 0.0)  # always roll in
+    monkeypatch.setattr(reactions.random, "random", lambda: 0.0)
     monkeypatch.setattr(banter_handler, "llm_available", lambda: True)
     monkeypatch.setattr(
         banter_handler.get_settings(), "banter_everywhere", True, raising=False

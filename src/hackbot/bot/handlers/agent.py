@@ -19,6 +19,7 @@ from sqlalchemy import select
 from hackbot.agent.extract import extract_hackathon
 from hackbot.agent.llm import LLMUnavailableError, llm_available
 from hackbot.agent.react import AgentDeps, load_history, run_agent
+from hackbot.bot import reactions, recent
 from hackbot.bot.cards import refresh_card
 from hackbot.bot.filters import MentionsBot, strip_mention
 from hackbot.bot.handlers._helpers import find_hack, read_attachments, take_questions
@@ -49,6 +50,8 @@ log = logging.getLogger(__name__)
 router = Router(name="agent")
 
 MAX_PROMPT = 3000
+# A reaction needs far less of the conversation than a butt-in does.
+REACTION_CONTEXT = 6
 # Attachment text gets its own, much larger ceiling: a rulebook is the point.
 MAX_DOC_PROMPT = 24_000
 _IMAGE_MIME = ("image/jpeg", "image/png", "image/webp")
@@ -78,6 +81,9 @@ async def on_mention(message: Message, bot: Bot) -> None:
 
     me = await bot.me()
     text = strip_mention(message_text(message), me.username)
+    # What this person actually typed, before any quoted message is folded in -
+    # a reaction belongs to their words, not to what they are quoting.
+    said = text
 
     # A reply that only says "@bot" is asking about the message it replies to.
     replied = message.reply_to_message
@@ -91,6 +97,17 @@ async def on_mention(message: Message, bot: Bot) -> None:
     if not text and not attachments:
         await message.reply("Ну? Говори, что надо.")
         return
+
+    # Being addressed is no reason not to have an opinion about what was said.
+    # This runs before the branches below so it applies to every shape of
+    # mention - a question, a document, a poster - and it never waits.
+    topic = topic_id(message)
+    reaction_key = (message.chat.id, topic)
+    if reactions.wanted(reaction_key, said):
+        reactions.schedule(
+            bot, message, reaction_key,
+            recent.tail(message.chat.id, topic, REACTION_CONTEXT), said,
+        )
 
     # Asking for a joke is answered directly. Routing it through the agent meant
     # the model announced the joke and the joke arrived separately - two
