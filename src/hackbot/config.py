@@ -43,6 +43,9 @@ class Settings(BaseSettings):
 
     # LLM (Ollama Cloud, OpenAI-compatible surface)
     ollama_api_key: str = ""
+    # A second key, used only when the first one answers with an error -
+    # a spent quota or a revoked key, not a bad prompt.
+    ollama_api_key_fallback: str = ""
     ollama_base_url: str = "https://ollama.com/v1"
     llm_model: str = "minimax-m3"
     llm_vision_model: str = "minimax-m3"
