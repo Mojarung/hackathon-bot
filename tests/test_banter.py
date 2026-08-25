@@ -8,7 +8,6 @@ import pytest
 
 from hackbot.agent.banter import MAX_REPLY_CHARS, build_prompt, clean
 from hackbot.bot import recent
-from hackbot.bot.handlers.banter import _on_cooldown
 from hackbot.bot.utils import has_attachment
 
 
@@ -149,16 +148,34 @@ def test_plain_text_message_passes() -> None:
 
 
 def test_cooldown_window() -> None:
-    key = (-100, 7)
-    assert _on_cooldown(key, 1000.0, 300) is False      # never spoken here
     from hackbot.bot.handlers import banter
 
-    banter._last_spoken[key] = 1000.0
+    key = (-100, 7)
+    clock = banter._last_spoken
+    clock.clear()
     try:
-        assert _on_cooldown(key, 1100.0, 300) is True   # 100s later, still quiet
-        assert _on_cooldown(key, 1301.0, 300) is False  # past the window
+        assert banter._on_cooldown(clock, key, 1000.0, 300) is False   # never spoken here
+        clock[key] = 1000.0
+        assert banter._on_cooldown(clock, key, 1100.0, 300) is True    # 100s later, quiet
+        assert banter._on_cooldown(clock, key, 1301.0, 300) is False   # past the window
+    finally:
+        clock.clear()
+
+
+def test_reactions_and_replies_have_separate_cooldowns() -> None:
+    """A reaction must not silence a butt-in, and the other way round."""
+    from hackbot.bot.handlers import banter
+
+    key = (-100, 7)
+    banter._last_spoken.clear()
+    banter._last_reacted.clear()
+    try:
+        banter._claim(banter._last_reacted, key, 1000.0)
+        assert banter._on_cooldown(banter._last_reacted, key, 1010.0, 60) is True
+        assert banter._on_cooldown(banter._last_spoken, key, 1010.0, 300) is False
     finally:
         banter._last_spoken.clear()
+        banter._last_reacted.clear()
 
 
 def test_claim_is_bounded_and_evicts_the_oldest_topic() -> None:
@@ -167,7 +184,7 @@ def test_claim_is_bounded_and_evicts_the_oldest_topic() -> None:
     banter._last_spoken.clear()
     try:
         for chat in range(banter.MAX_TRACKED_TOPICS + 10):
-            banter._claim((chat, None), float(chat))
+            banter._claim(banter._last_spoken, (chat, None), float(chat))
         assert len(banter._last_spoken) == banter.MAX_TRACKED_TOPICS
         assert (0, None) not in banter._last_spoken
         assert (banter.MAX_TRACKED_TOPICS + 9, None) in banter._last_spoken
@@ -181,9 +198,9 @@ def test_releasing_a_slot_lets_the_next_message_try_again() -> None:
     key = (-100, 7)
     banter._last_spoken.clear()
     try:
-        banter._claim(key, 1000.0)
-        assert banter._on_cooldown(key, 1010.0, 300) is True
-        banter._release(key)
-        assert banter._on_cooldown(key, 1010.0, 300) is False
+        banter._claim(banter._last_spoken, key, 1000.0)
+        assert banter._on_cooldown(banter._last_spoken, key, 1010.0, 300) is True
+        banter._release(banter._last_spoken, key)
+        assert banter._on_cooldown(banter._last_spoken, key, 1010.0, 300) is False
     finally:
         banter._last_spoken.clear()

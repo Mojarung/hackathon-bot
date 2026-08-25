@@ -7,13 +7,14 @@ message where it belongs. Nothing here talks to Telegram or to a model.
 
 from __future__ import annotations
 
+import asyncio
 from datetime import UTC, datetime
 
 import pytest
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
-from aiogram.methods import SendMessage, TelegramMethod
+from aiogram.methods import SendMessage, SetMessageReaction, TelegramMethod
 from aiogram.types import Chat, Document, Message, PhotoSize, Update, User
 
 from hackbot.bot import recent
@@ -66,11 +67,38 @@ def dp() -> Dispatcher:
 
 @pytest.fixture(autouse=True)
 def _clean_state():
-    recent.clear()
-    banter_handler._last_spoken.clear()
+    _reset()
     yield
+    _reset()
+
+
+def _reset() -> None:
     recent.clear()
     banter_handler._last_spoken.clear()
+    banter_handler._last_reacted.clear()
+
+
+def patch_everything(monkeypatch, *, reply: str | None = "влезаю", reaction: str | None = None):
+    """Cut every outside dependency: no model call may escape a test."""
+    spoken: list[str] = []
+    reacted: list[str] = []
+
+    async def fake_banter(lines, profiles, bot_name, bot_id):
+        spoken.append(" | ".join(f"{line.author}: {line.text}" for line in lines))
+        return reply
+
+    async def fake_reaction(lines, target):
+        reacted.append(target)
+        return reaction
+
+    monkeypatch.setattr(banter_handler, "make_banter", fake_banter)
+    monkeypatch.setattr(banter_handler, "pick_reaction", fake_reaction)
+    monkeypatch.setattr(banter_handler.random, "random", lambda: 0.0)  # always roll in
+    monkeypatch.setattr(banter_handler, "llm_available", lambda: True)
+    monkeypatch.setattr(
+        banter_handler.get_settings(), "banter_everywhere", True, raising=False
+    )
+    return spoken, reacted
 
 
 def make_message(update_id: int, text: str, **extra) -> Update:
@@ -88,18 +116,7 @@ def make_message(update_id: int, text: str, **extra) -> Update:
 
 
 async def test_plain_chatter_is_recorded_and_can_trigger(bot, dp, monkeypatch) -> None:
-    spoken: list[str] = []
-
-    async def fake_banter(lines, profiles, bot_name, bot_id):
-        spoken.append(" | ".join(f"{line.author}: {line.text}" for line in lines))
-        return "влезаю"
-
-    monkeypatch.setattr(banter_handler, "make_banter", fake_banter)
-    monkeypatch.setattr(banter_handler.random, "random", lambda: 0.0)   # always roll in
-    monkeypatch.setattr(banter_handler, "llm_available", lambda: True)
-    monkeypatch.setattr(
-        banter_handler.get_settings(), "banter_everywhere", True, raising=False
-    )
+    spoken, _ = patch_everything(monkeypatch)
 
     await dp.feed_update(bot, make_message(1, "первое сообщение в теме"))
     assert not spoken, "одной реплики мало, чтобы влезать"
@@ -127,65 +144,53 @@ async def test_plain_chatter_is_recorded_and_can_trigger(bot, dp, monkeypatch) -
         ),
     ],
 )
-async def test_never_butts_in_on_a_message_with_a_file(
+async def test_never_touches_a_message_with_a_file(
     bot, dp, monkeypatch, label: str, extra: dict
 ) -> None:
     """The user's hard rule: no attachment is touched unless the bot was addressed."""
-    called = False
-
-    async def fake_banter(*args, **kwargs):
-        nonlocal called
-        called = True
-        return "не должно случиться"
-
-    monkeypatch.setattr(banter_handler, "make_banter", fake_banter)
-    monkeypatch.setattr(banter_handler.random, "random", lambda: 0.0)
-    monkeypatch.setattr(banter_handler, "llm_available", lambda: True)
-    monkeypatch.setattr(
-        banter_handler.get_settings(), "banter_everywhere", True, raising=False
-    )
+    spoken, reacted = patch_everything(monkeypatch, reaction="🤡")
 
     await dp.feed_update(bot, make_message(1, "просто болтовня в чате"))
     await dp.feed_update(bot, make_message(2, "вот наши условия хакатона", **extra))
+    await asyncio.sleep(0.05)  # let any detached reaction task run
 
-    assert not called, f"{label}: бот не должен влезать в сообщение с вложением"
-    assert not [c for c in bot.session.calls if isinstance(c, SendMessage)]
+    assert not spoken, f"{label}: бот не должен влезать в сообщение с вложением"
+    # The plain first message may well earn a reaction - the file must not.
+    assert "вот наши условия хакатона" not in reacted, f"{label}: и реакцию не ставит"
+    reactions = [c for c in bot.session.calls if isinstance(c, SetMessageReaction)]
+    assert all(c.message_id != 2 for c in reactions), f"{label}: реакция ушла на файл"
 
 
 async def test_commands_and_short_replies_are_left_alone(bot, dp, monkeypatch) -> None:
-    called = False
-
-    async def fake_banter(*args, **kwargs):
-        nonlocal called
-        called = True
-        return "нет"
-
-    monkeypatch.setattr(banter_handler, "make_banter", fake_banter)
-    monkeypatch.setattr(banter_handler.random, "random", lambda: 0.0)
-    monkeypatch.setattr(banter_handler, "llm_available", lambda: True)
-    monkeypatch.setattr(
-        banter_handler.get_settings(), "banter_everywhere", True, raising=False
-    )
+    spoken, reacted = patch_everything(monkeypatch, reaction="🤡")
 
     await dp.feed_update(bot, make_message(1, "первое нормальное сообщение"))
     await dp.feed_update(bot, make_message(2, "/timeline"))
     await dp.feed_update(bot, make_message(3, "ок"))
+    await asyncio.sleep(0.05)
 
-    assert not called
+    assert not spoken
+    assert reacted == ["первое нормальное сообщение"], "команды и «ок» не трогаем"
 
 
-async def test_caption_of_a_file_never_reaches_the_buffer(bot, dp) -> None:
-    """The rule holds one message later too, not just on the media message itself."""
-    await dp.feed_update(bot, make_message(1, "обычная реплика в чате"))
-    await dp.feed_update(
-        bot,
-        make_message(
-            2,
-            "вот условия хакатона, дедлайн 20 сентября",
-            document=Document(file_id="f", file_unique_id="u"),
-        ),
-    )
+async def test_reaction_lands_on_the_message_that_earned_it(bot, dp, monkeypatch) -> None:
+    _, reacted = patch_everything(monkeypatch, reply=None, reaction="🤡")
 
-    stored = [line.text for line in recent.tail(CHAT_ID, TOPIC_ID, 10)]
-    assert stored == ["обычная реплика в чате"]
-    assert not any("дедлайн" in line for line in stored)
+    await dp.feed_update(bot, make_message(1, "я задеплою прямо в прод в пятницу"))
+    await asyncio.sleep(0.05)
+
+    assert reacted == ["я задеплою прямо в прод в пятницу"]
+    calls = [c for c in bot.session.calls if isinstance(c, SetMessageReaction)]
+    assert len(calls) == 1
+    assert calls[0].chat_id == CHAT_ID
+    assert calls[0].message_id == 1
+    assert [r.emoji for r in calls[0].reaction] == ["🤡"]
+
+
+async def test_model_declining_leaves_no_reaction(bot, dp, monkeypatch) -> None:
+    patch_everything(monkeypatch, reply=None, reaction=None)
+
+    await dp.feed_update(bot, make_message(1, "обычное рабочее сообщение без эмоций"))
+    await asyncio.sleep(0.05)
+
+    assert not [c for c in bot.session.calls if isinstance(c, SetMessageReaction)]

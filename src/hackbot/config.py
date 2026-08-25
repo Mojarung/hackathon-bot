@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     banter_cooldown_seconds: int = 300  # per topic, so a burst cannot become a monologue
     banter_context: int = 8            # how many recent lines it gets to read
     banter_everywhere: bool = False    # by default only topics with a hackathon
+
+    # Silent emoji reactions on other people's messages.
+    reaction_chance: float = 0.10      # per message; 0 disables it entirely
+    reaction_cooldown_seconds: int = 60  # per topic; reactions are cheap, so shorter
     log_level: str = "INFO"
 
     @property
