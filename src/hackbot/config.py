@@ -68,6 +68,12 @@ class Settings(BaseSettings):
     card_refresh_seconds: int = 60
     sticker_set: str = "mojarung"      # pack the bot sprinkles into the chat
     sticker_chance: float = 0.25       # 0 disables it entirely
+
+    # Butting into a conversation nobody invited it to.
+    banter_chance: float = 0.10        # per message; 0 disables it entirely
+    banter_cooldown_seconds: int = 300  # per topic, so a burst cannot become a monologue
+    banter_context: int = 8            # how many recent lines it gets to read
+    banter_everywhere: bool = False    # by default only topics with a hackathon
     log_level: str = "INFO"
 
     @property

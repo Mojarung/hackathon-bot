@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 from aiogram.types import BotCommand, BotCommandScopeAllGroupChats
 
 from hackbot.bot.middlewares.identity import IdentityMiddleware
+from hackbot.bot.middlewares.recent import RecentMiddleware
 from hackbot.bot.stickers import install as install_stickers
 from hackbot.config import get_settings
 
@@ -58,6 +59,7 @@ def build_dispatcher() -> Dispatcher:
     # of the config, and so the router order below is the single source of truth.
     from hackbot.bot.handlers import (
         agent,
+        banter,
         common,
         fun,
         intake,
@@ -72,9 +74,12 @@ def build_dispatcher() -> Dispatcher:
     dp = Dispatcher()
     # Outer, so the sender is recorded even for messages no handler wants.
     dp.message.outer_middleware(IdentityMiddleware())
+    dp.message.outer_middleware(RecentMiddleware())
     # Order matters: the free-form agent router is last, so every slash command
     # and every button wins the routing race before the LLM is ever consulted.
-    for module in (common, intake, manage, timeline, team, media, fun, who, queries, agent):
+    for module in (
+        common, intake, manage, timeline, team, media, fun, who, queries, agent, banter,
+    ):
         dp.include_router(module.router)
     return dp
 

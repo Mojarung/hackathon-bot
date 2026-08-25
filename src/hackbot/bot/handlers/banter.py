@@ -1,0 +1,139 @@
+"""Occasionally the bot answers something nobody asked it.
+
+Registered dead last, after the free-form agent, so it only ever sees messages
+that no command, no button and no mention wanted. That ordering is the whole
+safety story: anything addressed to the bot has already been handled by the time
+a message reaches here.
+
+Hard rule: this path never looks at attachments. Documents and photos are read
+only when someone tags the bot or replies to it - see handlers/agent.py and
+handlers/media.py. A message carrying a file is skipped outright rather than
+answered from its caption, because a reply under a document reads as a comment
+on the document whatever the words say.
+"""
+
+from __future__ import annotations
+
+import logging
+import random
+import time
+from collections import OrderedDict
+
+from aiogram import Bot, F, Router
+from aiogram.types import Message
+
+from hackbot.agent.banter import make_banter
+from hackbot.agent.llm import llm_available
+from hackbot.bot import recent
+from hackbot.bot.utils import message_text, topic_id
+from hackbot.config import get_settings
+from hackbot.db.base import session_scope
+from hackbot.domain.services import people
+from hackbot.domain.services.hackathons import get_by_topic
+from hackbot.domain.textutils import esc
+
+log = logging.getLogger(__name__)
+router = Router(name="banter")
+
+# Below this there is nothing to riff on: "ок", "+", "ага".
+MIN_TEXT_CHARS = 12
+# One line of context is not a conversation.
+MIN_LINES = 2
+# Topics the cooldown is remembered for. Bounded for the same reason the message
+# buffer is: the bot can be added to any number of chats.
+MAX_TRACKED_TOPICS = 500
+
+Key = tuple[int, int | None]
+
+_last_spoken: OrderedDict[Key, float] = OrderedDict()
+
+
+def _has_attachment(message: Message) -> bool:
+    return any(
+        (
+            message.photo,
+            message.document,
+            message.video,
+            message.animation,
+            message.audio,
+            message.voice,
+            message.video_note,
+            message.sticker,
+        )
+    )
+
+
+def _on_cooldown(key: Key, now: float, seconds: int) -> bool:
+    last = _last_spoken.get(key)
+    return last is not None and now - last < seconds
+
+
+def _claim(key: Key, now: float) -> None:
+    _last_spoken[key] = now
+    _last_spoken.move_to_end(key)
+    while len(_last_spoken) > MAX_TRACKED_TOPICS:
+        _last_spoken.popitem(last=False)
+
+
+def _release(key: Key) -> None:
+    _last_spoken.pop(key, None)
+
+
+@router.message(F.chat.type.in_({"group", "supergroup"}))
+async def maybe_butt_in(message: Message, bot: Bot) -> None:
+    settings = get_settings()
+    if settings.banter_chance <= 0 or message.from_user is None or message.from_user.is_bot:
+        return
+    if _has_attachment(message):
+        return
+
+    text = message_text(message)
+    if len(text) < MIN_TEXT_CHARS or text.startswith("/"):
+        return
+    if not llm_available():
+        return
+    if random.random() >= settings.banter_chance:
+        return
+
+    chat_id, thread_id = message.chat.id, topic_id(message)
+    key: Key = (chat_id, thread_id)
+    lines = recent.tail(chat_id, thread_id, settings.banter_context)
+    if len(lines) < MIN_LINES:
+        return
+
+    # Everything from the cooldown check to the claim has to run without an
+    # await. aiogram handles updates concurrently, so a gap here means two
+    # messages arriving together both pass the check and the bot answers twice.
+    now = time.monotonic()
+    if _on_cooldown(key, now, settings.banter_cooldown_seconds):
+        return
+    _claim(key, now)
+
+    me = await bot.me()
+
+    async with session_scope() as session:
+        if not settings.banter_everywhere:
+            if await get_by_topic(session, chat_id, thread_id) is None:
+                _release(key)
+                return
+        profiles: dict[int, str] = {}
+        for line in lines:
+            if line.user_id == me.id or line.user_id in profiles:
+                continue
+            person = await people.get(session, line.user_id)
+            if person is not None and person.facts:
+                profiles[line.user_id] = person.summary()
+
+    reply = await make_banter(lines, profiles, me.full_name or "бот", me.id)
+    if reply is None:
+        # Nothing worth saying - give the slot back so a real conversation is
+        # not silenced for the rest of the cooldown.
+        _release(key)
+        return
+
+    log.info("banter in chat %s topic %s", chat_id, thread_id)
+    await message.reply(esc(reply), disable_web_page_preview=True)
+    recent.record(
+        chat_id, thread_id, author=me.full_name or "бот",
+        user_id=me.id, text=reply, is_bot=True,
+    )
