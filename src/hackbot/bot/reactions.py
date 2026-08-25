@@ -85,6 +85,7 @@ async def _react(
     emoji = await pick_reaction(lines, text)
     if emoji is None:
         release(key)  # nothing fitted, so do not spend the cooldown on it
+        log.info("реакция пропущена: модель ничего не выбрала")
         return
     try:
         await bot.set_message_reaction(

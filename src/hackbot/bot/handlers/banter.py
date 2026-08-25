@@ -111,6 +111,10 @@ async def maybe_react_or_butt_in(message: Message, bot: Bot) -> None:
             if await get_by_topic(session, chat_id, thread_id) is None:
                 reactions.release(key)
                 _release(key)
+                log.info(
+                    "banter/reaction пропущены: в теме %s нет хакатона "
+                    "(BANTER_EVERYWHERE=true снимет ограничение)", thread_id,
+                )
                 return
         profiles: dict[int, str] = {}
         if speak:
@@ -132,6 +136,7 @@ async def maybe_react_or_butt_in(message: Message, bot: Bot) -> None:
         # Nothing worth saying - give the slot back so a real conversation is
         # not silenced for the rest of the cooldown.
         _release(key)
+        log.info("banter пропущен: модель решила промолчать")
         return
 
     log.info("banter in chat %s topic %s", chat_id, thread_id)
