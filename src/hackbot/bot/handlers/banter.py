@@ -93,13 +93,25 @@ async def maybe_react_or_butt_in(message: Message, bot: Bot) -> None:
     # the cooldown check - the bot would answer twice.
     now = time.monotonic()
     react = reactions.wanted(key, text, now)
+    thin = len(lines) < MIN_LINES
+    cooling = _on_cooldown(key, now, settings.banter_cooldown_seconds)
     speak = (
         settings.banter_chance > 0
-        and len(lines) >= MIN_LINES
+        and not thin
+        and not cooling
         and random.random() < settings.banter_chance
-        and not _on_cooldown(key, now, settings.banter_cooldown_seconds)
     )
     if not (react or speak):
+        # One line per message worth reacting to, so silence has a stated reason.
+        # Anything shorter than MIN_TEXT_CHARS never gets here, which keeps this
+        # to the handful of real messages an hour rather than every "ок".
+        log.info(
+            "молчу: тема=%s реплик=%s%s%s",
+            thread_id,
+            len(lines),
+            " мало-контекста" if thin else "",
+            " пауза" if cooling else "",
+        )
         return
     if speak:
         _claim(key, now)
