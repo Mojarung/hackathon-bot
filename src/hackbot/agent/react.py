@@ -24,7 +24,7 @@ from hackbot.config import get_settings
 from hackbot.db.base import session_scope
 from hackbot.db.models import Hackathon
 from hackbot.domain.enums import EventKind, HackStatus, LinkKind
-from hackbot.domain.services import people
+from hackbot.domain.services import calsync, gcal, people
 from hackbot.domain.services.events import (
     add_event,
     delete_event,
@@ -245,6 +245,9 @@ async def set_field(ctx: RunContext[AgentDeps], field: str, value: str) -> str:
         if not changed:
             return "Значение и так было таким, ничего не менял."
 
+        # Every calendar entry carries the hackathon's title and timezone, so a
+        # change here restyles the whole timeline, not just the hackathon card.
+        calsync.mark_dirty(hack.id)
         if field in {"starts_at", "reg_deadline"}:
             from hackbot.domain.services.events import ensure_deadline_events
 
@@ -432,6 +435,37 @@ async def send_calendar_file(ctx: RunContext[AgentDeps]) -> str:
         return "Хакатон в этой теме не заведён."
     ctx.deps.outbox.append("ics")
     return "Файл календаря отправлен отдельным сообщением."
+
+
+@agent.tool
+async def sync_google_calendar(ctx: RunContext[AgentDeps]) -> str:
+    """Прямо сейчас записать этапы в общий Google Calendar команды.
+
+    Нужен, когда просят «синхронизируй календарь» или «залей этапы в гугл-календарь».
+    Обычные правки таймлайна доезжают сами, вручную звать не обязательно.
+    """
+    if ctx.deps.hack_id is None:
+        return "Хакатон в этой теме не заведён."
+    if not gcal.enabled():
+        return "Google Calendar не настроен, интеграция выключена. Как включить — команда /gcal."
+
+    try:
+        # push_hackathon logs a refused stage and moves on, so on its own it would
+        # answer "записал 0" for an unreachable calendar exactly as it does for an
+        # empty timeline. One read up front tells those two apart.
+        await gcal.check()
+        async with session_scope() as session:
+            hack = await _load(ctx.deps, session)
+            if hack is None:
+                return "Хакатон в этой теме не заведён."
+            written = await calsync.push_hackathon(session, hack)
+    except gcal.GCalError as exc:
+        if exc.status == 403:
+            return "Google отказал: календарь не расшарен боту или дали только просмотр."
+        if exc.status == 404:
+            return "Google отказал: неверный идентификатор календаря в настройках."
+        return f"Google Calendar отказал ({exc.status}), синхронизация не прошла."
+    return f"Записал в Google Calendar событий: {written}."
 
 
 @agent.tool

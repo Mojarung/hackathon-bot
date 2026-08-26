@@ -28,7 +28,7 @@ from hackbot.config import get_settings
 from hackbot.db.base import session_scope
 from hackbot.db.models import Event, Hackathon
 from hackbot.domain.enums import HackStatus
-from hackbot.domain.services import kv
+from hackbot.domain.services import calsync, kv
 from hackbot.domain.services.events import (
     due_reminders,
     expire_stale_reminders,
@@ -56,7 +56,7 @@ async def scheduler_loop(bot: Bot, stop: asyncio.Event) -> None:
     log.info("scheduler started, tick=%ss", TICK_SECONDS)
     while not stop.is_set():
         for step in (_send_due_reminders, _advance_statuses, _send_digests,
-                     _refresh_cards, _daily_backup):
+                     _refresh_cards, _sync_calendar, _daily_backup):
             try:
                 await step(bot)
             except TelegramRetryAfter as exc:
@@ -183,6 +183,22 @@ async def _refresh_cards(bot: Bot) -> None:
                 continue
             _card_last_painted[hack.id] = loop_now
             await refresh_card(bot, session, hack)
+
+
+# ---------------------------------------------------------------- calendar
+
+
+async def _sync_calendar(_bot: Bot) -> None:
+    """Mirror timelines into Google Calendar.
+
+    The tick is deliberately dumb: `sync_due` owns the whole policy - it returns
+    immediately when the integration is off, drains whatever was marked dirty by
+    an edit, and only occasionally walks every hackathon.
+    """
+    async with session_scope() as session:
+        written = await calsync.sync_due(session)
+    if written:
+        log.info("google calendar: %s events written", written)
 
 
 # ---------------------------------------------------------------- backup

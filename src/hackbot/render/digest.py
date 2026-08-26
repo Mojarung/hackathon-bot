@@ -8,6 +8,7 @@ from hackbot.db.models import Event, Hackathon, Participant
 from hackbot.domain.enums import EventKind
 from hackbot.domain.services.events import ProposedEvent
 from hackbot.domain.services.hackathons import hack_tz, primary_deadline
+from hackbot.domain.services.ics import google_calendar_link
 from hackbot.domain.textutils import esc
 from hackbot.domain.timeutils import (
     fmt_time,
@@ -65,8 +66,11 @@ def render_reminder(
             lines.append("")
             lines.append(links)
 
+    # Rides on the footer line rather than its own: a ping is read in one glance,
+    # and this is only for the few who never subscribed to the shared calendar.
+    add_link = google_calendar_link(hack, event)
     lines.append("")
-    lines.append(f"<i>{esc(title_line(hack))}</i>")
+    lines.append(f'<a href="{esc(add_link)}">📅 в календарь</a> · <i>{esc(title_line(hack))}</i>')
     return "\n".join(lines)
 
 

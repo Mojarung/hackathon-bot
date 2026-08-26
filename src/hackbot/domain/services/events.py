@@ -17,6 +17,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from hackbot.db.models import Event, Hackathon, Reminder
 from hackbot.domain.enums import EventKind
+
+# Marking the calendar dirty belongs here rather than in every caller: a timeline
+# is edited from slash commands, the agent's tools, the intake templates and the
+# document ingest, and one forgotten call site is a stage that silently never
+# reaches Google. calsync reads timelines back through this module, so the two
+# import each other - only the module form survives that, never `from ... import`.
+from hackbot.domain.services import calsync
 from hackbot.domain.timeutils import now_utc
 
 EDITABLE_FIELDS = frozenset(
@@ -93,6 +100,7 @@ async def add_event(
     session.add(event)
     await session.flush()
     await sync_reminders(session, event, offsets)
+    calsync.mark_dirty(hack.id)
     return event
 
 
@@ -112,12 +120,17 @@ async def update_event(
         await session.flush()
         if "starts_at" in changed:
             await sync_reminders(session, event)
+        calsync.mark_dirty(event.hackathon_id)
     return changed
 
 
 async def delete_event(session: AsyncSession, event: Event) -> None:
+    # Read the owner first: after the delete flushes, the instance is expired and
+    # touching an attribute would go looking for a row that is no longer there.
+    hackathon_id = event.hackathon_id
     await session.delete(event)
     await session.flush()
+    calsync.mark_dirty(hackathon_id)
 
 
 # ---------------------------------------------------------------- reminders

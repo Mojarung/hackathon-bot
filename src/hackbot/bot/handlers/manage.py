@@ -11,6 +11,7 @@ from hackbot.bot.handlers._helpers import note_change, require_editor, require_h
 from hackbot.bot.utils import topic_id
 from hackbot.db.base import session_scope
 from hackbot.domain.enums import HackStatus, LinkKind
+from hackbot.domain.services import calsync
 from hackbot.domain.services.events import ensure_deadline_events, list_events
 from hackbot.domain.services.hackathons import (
     derive_status,
@@ -162,6 +163,10 @@ async def cmd_set(message: Message, command: CommandObject, bot: Bot) -> None:
         if not changed:
             await message.reply("Так и было.")
             return
+
+        # Title, year and timezone are stamped onto every calendar entry of this
+        # hackathon, so editing one of them restyles the whole timeline in Google.
+        calsync.mark_dirty(hack.id)
 
         # A new start or registration date has to grow its own reminders.
         if field in {"starts_at", "reg_deadline"}:

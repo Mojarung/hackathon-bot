@@ -61,6 +61,16 @@ class Settings(BaseSettings):
     github_org: str = "Mojarung"
     github_private: bool = True
 
+    # Google Calendar
+    # One shared calendar for every hackathon, not one per hackathon: the human
+    # creates it and hands the service account write access, so the bot only ever
+    # writes events into someone else's calendar and can never lose it.
+    google_credentials_file: Path = Path("data/google-service-account.json")
+    google_calendar_id: str = ""            # blank switches the whole integration off
+    # Only the full sweep runs this rarely - an edited hackathon is pushed on the
+    # next tick, so the interval covers drift, not latency.
+    google_calendar_sync_minutes: int = 30
+
     # App
     tz_default: str = "Europe/Moscow"
     db_path: Path = Path("data/hackbot.db")
@@ -114,12 +124,27 @@ class Settings(BaseSettings):
         return p if p.is_absolute() else (ROOT_DIR / p)
 
     @property
+    def abs_google_credentials_file(self) -> Path:
+        p = self.google_credentials_file
+        return p if p.is_absolute() else (ROOT_DIR / p)
+
+    @property
     def llm_enabled(self) -> bool:
         return bool(self.ollama_api_key)
 
     @property
     def github_enabled(self) -> bool:
         return bool(self.github_token)
+
+    @property
+    def google_calendar_enabled(self) -> bool:
+        """Both halves have to be present, and the key file has to actually exist.
+
+        Half a setup is the likely state on a fresh server - the id pasted into
+        `.env` before the JSON was copied over - and it would turn every sync tick
+        into a failing request instead of a no-op.
+        """
+        return bool(self.google_calendar_id) and self.abs_google_credentials_file.exists()
 
     def public_url(self, path: str = "") -> str:
         base = self.web_public_url.rstrip("/")

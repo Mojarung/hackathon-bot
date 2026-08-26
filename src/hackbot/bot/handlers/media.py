@@ -1,4 +1,4 @@
-"""Documents, repository and calendar: /doc, /docs, /repo, /ics."""
+"""Documents, repository and calendar: /doc, /docs, /repo, /ics, /gcal."""
 
 from __future__ import annotations
 
@@ -10,10 +10,11 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, Message
 
 from hackbot.bot.cards import refresh_card
-from hackbot.bot.handlers._helpers import require_editor, require_hack
+from hackbot.bot.handlers._helpers import NO_HACK, find_hack, require_editor, require_hack
 from hackbot.bot.utils import collect_attachments, message_text
 from hackbot.config import get_settings
 from hackbot.db.base import session_scope
+from hackbot.domain.services import calsync, gcal
 from hackbot.domain.services.docs import add_doc, build_readme, list_docs, push_doc
 from hackbot.domain.services.events import list_events
 from hackbot.domain.services.github import (
@@ -39,6 +40,17 @@ REPO_HELP = (
     "<code>/repo attach ссылка</code> — прикрепить существующий\n"
     "<code>/repo push</code> — залить документы и README\n"
     "<code>/repo detach</code> — отвязать"
+)
+
+GCAL_SETUP = (
+    "📅 <b>Google Calendar не подключён.</b>\n\n"
+    "Как включить:\n"
+    "1. Заведи в Google Calendar отдельный календарь — в него поедут все хакатоны.\n"
+    "2. Настройки календаря → «Доступ для отдельных пользователей» → добавь сервис-аккаунт "
+    "бота с правом «Внесение изменений в мероприятия».\n"
+    "3. Идентификатор календаря из тех же настроек положи в <code>GOOGLE_CALENDAR_ID</code> "
+    "и перезапусти бота.\n\n"
+    "Подробности — в <code>docs/google-calendar.md</code>."
 )
 
 
@@ -283,4 +295,78 @@ async def cmd_ics(message: Message) -> None:
         )
     await message.reply_document(
         BufferedInputFile(payload, filename=name), caption=caption
+    )
+
+
+def _gcal_setup_text() -> str:
+    """The e-mail is the whole point of this reply: it is what has to be shared."""
+    email = gcal.account_email()
+    if email is None:
+        return (
+            f"{GCAL_SETUP}\n\nКлюча сервис-аккаунта тоже нет — положи JSON в "
+            "<code>data/google-service-account.json</code>."
+        )
+    return f"{GCAL_SETUP}\n\nСервис-аккаунт для шага 2: <code>{esc(email)}</code>"
+
+
+def _gcal_error_text(exc: gcal.GCalError) -> str:
+    if exc.status == 403:
+        return (
+            "Google отказал: календарь не расшарен сервис-аккаунту или выдан только просмотр.\n"
+            "Нужно право «Внесение изменений в мероприятия»."
+        )
+    if exc.status == 404:
+        return (
+            "Google отказал: не тот идентификатор календаря.\n"
+            "Проверь <code>GOOGLE_CALENDAR_ID</code> в настройках календаря."
+        )
+    if exc.status == gcal.CONFIG_STATUS:
+        # Ours, not Google's. "Try again later" would send the admin in circles:
+        # the file will not repair itself.
+        return (
+            f"Календарь не настроен: {exc.message}.\n"
+            "Смотри <code>data/google-service-account.json</code> — "
+            "повторная попытка тут не поможет."
+        )
+    if exc.status == gcal.TRANSPORT_STATUS:
+        return "Google не отвечает. Таймлайн в чате работает, календарь догонит сам."
+    return f"Google Calendar отказал ({exc.status}). Попробуй ещё раз чуть позже."
+
+
+@router.message(Command("gcal", "гуглкалендарь"))
+async def cmd_gcal(message: Message, bot: Bot) -> None:
+    """Push this hackathon into the shared Google Calendar right now."""
+    # Rights are checked before the setup hint, not after: that hint hands out
+    # the service-account address, and with it the GCP project id.
+    if not await require_editor(message, bot):
+        return
+    if not gcal.enabled():
+        await message.reply(_gcal_setup_text(), disable_web_page_preview=True)
+        return
+    async with session_scope() as session:
+        if await require_hack(session, message) is None:
+            return
+
+    status = await message.reply("📅 Синхронизирую с Google Calendar…")
+    try:
+        calendar_name = await gcal.check()
+        async with session_scope() as session:
+            hack = await find_hack(session, message)
+            if hack is None:
+                await status.edit_text(NO_HACK)
+                return
+            written = await calsync.push_hackathon(session, hack)
+    except gcal.GCalError as exc:
+        log.warning("google calendar refused: %s %s", exc.status, exc.message)
+        await status.edit_text(_gcal_error_text(exc))
+        return
+    except Exception:
+        log.exception("google calendar sync failed")
+        await status.edit_text("Не смог достучаться до Google Calendar. Попробуй ещё раз.")
+        return
+
+    await status.edit_text(
+        f"📅 <b>{esc(calendar_name)}</b>\n"
+        f"Записал событий: {written}\n\n"
+        "<i>Дальше правки таймлайна доедут сами.</i>"
     )
