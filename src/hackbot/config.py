@@ -47,8 +47,13 @@ class Settings(BaseSettings):
     # a spent quota or a revoked key, not a bad prompt.
     ollama_api_key_fallback: str = ""
     ollama_base_url: str = "https://ollama.com/v1"
-    llm_model: str = "minimax-m3"
-    llm_vision_model: str = "minimax-m3"
+    # gemma4:31b rather than something bigger because it is the only model on the
+    # free tier that reads images at all - the rest answer HTTP 400 to an image
+    # part - and the bot has to understand a poster someone drops in the chat.
+    # Ollama moves models behind the paywall without warning: minimax-m3 sat here
+    # until 2026-08-30, when it started answering 402 to every request.
+    llm_model: str = "gemma4:31b"
+    llm_vision_model: str = "gemma4:31b"
     llm_fun_model: str = ""  # humour generator; falls back to llm_model
     # The conversational agent may sit on another OpenAI-compatible provider
     # (Featherless, OpenRouter, a local gateway). Blank = same as Ollama above.
