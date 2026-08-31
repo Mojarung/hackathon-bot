@@ -13,7 +13,7 @@ from aiogram import BaseMiddleware
 from aiogram.types import Message, TelegramObject
 
 from hackbot.bot import recent
-from hackbot.bot.utils import actor_name, has_attachment, message_text, topic_id
+from hackbot.bot.utils import has_attachment, message_text, speaker_label, topic_id
 
 
 class RecentMiddleware(BaseMiddleware):
@@ -32,7 +32,11 @@ class RecentMiddleware(BaseMiddleware):
                 recent.record(
                     event.chat.id,
                     topic_id(event),
-                    author=actor_name(event),
+                    # The same signature the agent stamps on its own turns. A bare
+                    # display name is not an identifier: one member of the live chat
+                    # is called "- +", and two people can share a first name - which
+                    # is precisely when the bot starts crediting the wrong person.
+                    author=speaker_label(event),
                     user_id=event.from_user.id,
                     text=text,
                     is_bot=event.from_user.is_bot,

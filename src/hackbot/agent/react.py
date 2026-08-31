@@ -17,7 +17,7 @@ from pydantic_ai import Agent, BinaryContent, RunContext
 from pydantic_ai.messages import ModelMessage
 
 from hackbot.agent import history as history_store
-from hackbot.agent import prompts
+from hackbot.agent import lore, prompts
 from hackbot.agent.defaults import DEFAULT_PERSONA
 from hackbot.agent.llm import chat_model, model_settings, vision_model
 from hackbot.config import get_settings
@@ -37,11 +37,15 @@ from hackbot.domain.services.github import GitHubError, attach_repo, create_repo
 from hackbot.domain.services.hackathons import (
     EDITABLE_FIELDS,
     create,
+    find_by_title,
     hack_tz,
     missing_fields,
     primary_deadline,
     set_link,
     update_fields,
+)
+from hackbot.domain.services.hackathons import (
+    delete as delete_hack,
 )
 from hackbot.domain.services.participants import (
     add_by_name,
@@ -94,6 +98,28 @@ def _persona(ctx: RunContext[AgentDeps]) -> str:
 
 
 @agent.instructions
+def _lore(ctx: RunContext[AgentDeps]) -> str:
+    """Who these people are and how they talk, in every prompt.
+
+    Injected rather than left to the `lore` tool: the bot has to already sound
+    like it belongs here on the first reply, and a tool it may not think to call
+    cannot do that. The tool covers the long tail - a name or a meme it needs to
+    look up. Empty when the lore files are not installed, which is the normal
+    state of a fresh checkout.
+    """
+    core = lore.compact()
+    if not core:
+        return ""
+    return (
+        "Ты живёшь в этом чате давно. Вот что ты про него знаешь:\n\n"
+        f"{core}\n\n"
+        "Это твой контекст, а не тема для разговора: не пересказывай лор без "
+        "просьбы и не притворяйся, что видел то, чего не видел. Нужны подробности "
+        "про человека, мем или прошлый хакатон — вызови lore_lookup."
+    )
+
+
+@agent.instructions
 def _time_context(ctx: RunContext[AgentDeps]) -> str:
     local = to_local(now_utc(), ctx.deps.tz)
     return (
@@ -124,8 +150,12 @@ async def _who_is_talking(ctx: RunContext[AgentDeps]) -> str:
         lines.append("Про него ты пока ничего не знаешь.")
 
     if others:
-        lines.append("Кого ещё знаешь в этом чате:")
-        lines += [f"- {person.summary()}" for person in others]
+        lines.append("Кто ещё есть в этом чате:")
+        lines += [f"- {person.roster_line()}" for person in others]
+        lines.append(
+            "Это разные люди. Не смешивай их и не приписывай одному сказанное другим; "
+            "если не уверен, кто именно имеется в виду — спроси, а не угадывай."
+        )
 
     lines.append(
         "Реплики в переписке подписаны автором в виде «Имя (@ник): текст» — так ты "
@@ -439,33 +469,60 @@ async def send_calendar_file(ctx: RunContext[AgentDeps]) -> str:
 
 @agent.tool
 async def sync_google_calendar(ctx: RunContext[AgentDeps]) -> str:
-    """Прямо сейчас записать этапы в общий Google Calendar команды.
+    """Записать в общий Google Calendar расписание ВСЕХ хакатонов этого чата.
 
-    Нужен, когда просят «синхронизируй календарь» или «залей этапы в гугл-календарь».
-    Обычные правки таймлайна доезжают сами, вручную звать не обязательно.
+    Нужен, когда просят «синхронизируй календарь», «залей все хакатоны в гугл-календарь»,
+    «по всем чатам добавь». Календарь общий, темы значения не имеют — работает и из
+    General, где хакатона нет. Обычные правки таймлайна доезжают сами.
     """
-    if ctx.deps.hack_id is None:
-        return "Хакатон в этой теме не заведён."
     if not gcal.enabled():
         return "Google Calendar не настроен, интеграция выключена. Как включить — команда /gcal."
 
     try:
-        # push_hackathon logs a refused stage and moves on, so on its own it would
+        # push_chat logs a refused stage and moves on, so on its own it would
         # answer "записал 0" for an unreachable calendar exactly as it does for an
-        # empty timeline. One read up front tells those two apart.
+        # empty chat. One read up front tells those two apart.
         await gcal.check()
         async with session_scope() as session:
-            hack = await _load(ctx.deps, session)
-            if hack is None:
-                return "Хакатон в этой теме не заведён."
-            written = await calsync.push_hackathon(session, hack)
+            done = await calsync.push_chat(session, ctx.deps.chat_id)
     except gcal.GCalError as exc:
         if exc.status == 403:
             return "Google отказал: календарь не расшарен боту или дали только просмотр."
         if exc.status == 404:
             return "Google отказал: неверный идентификатор календаря в настройках."
         return f"Google Calendar отказал ({exc.status}), синхронизация не прошла."
-    return f"Записал в Google Calendar событий: {written}."
+
+    if not done:
+        return "В этом чате хакатонов нет, записывать нечего."
+    total = sum(written for _, written in done)
+    rows = ", ".join(f"{hack.title}: {written}" for hack, written in done)
+    return f"Записал в Google Calendar событий: {total} ({rows})."
+
+
+@agent.tool
+async def drop_hackathon(ctx: RunContext[AgentDeps], название: str) -> str:
+    """Удалить хакатон целиком, если передумали участвовать.
+
+    Сносит и все его этапы, напоминания, ссылки, документы и состав, и убирает
+    его события из общего Google Calendar. Работает по названию из любой темы.
+    Действие необратимое: если название названо неточно или подходит несколько —
+    переспроси, а не угадывай.
+    """
+    async with session_scope() as session:
+        hack, candidates = await find_by_title(session, ctx.deps.chat_id, название)
+        if hack is None:
+            if len(candidates) > 1:
+                names = ", ".join(h.title for h in candidates)
+                return f"Под «{название}» подходит несколько: {names}. Уточни, какой именно."
+            return f"Хакатона «{название}» в этом чате нет."
+
+        hack_id, title, events = hack.id, hack.title, len(hack.events)
+        await delete_hack(session, hack)
+
+    # Only after the row is gone: until then the periodic sweep could write the
+    # very stages being removed straight back into the calendar.
+    wiped = await calsync.purge_hackathon(hack_id)
+    return f"Снёс «{title}»: этапов {events}, из календаря убрал {wiped}."
 
 
 @agent.tool
@@ -712,3 +769,15 @@ async def run_agent(
 
 def load_history(raw: str | None) -> list[ModelMessage]:
     return history_store.load(raw)
+
+
+@agent.tool
+async def lore_lookup(ctx: RunContext[AgentDeps], запрос: str) -> str:
+    """Порыться в памяти чата: человек, мем, прошлый хакатон, как о чём шутят.
+
+    запрос — имя, ник, слово из мема или название хакатона.
+    """
+    found = lore.search(запрос)
+    if not found:
+        return f"Про {запрос!r} в памяти чата ничего нет. Не выдумывай."
+    return found

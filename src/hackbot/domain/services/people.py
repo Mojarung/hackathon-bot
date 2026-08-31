@@ -22,7 +22,12 @@ from hackbot.domain.timeutils import now_utc
 # small; the oldest fragments fall off the front when a field outgrows this.
 FIELD_LIMIT = 400
 NOTES_LIMIT = 600
-ROSTER_LIMIT = 12
+# Raised along with dropping the "only people with facts" filter: entries are one
+# short line each, and a roster that runs out before the quiet half of the chat
+# would reintroduce the very blindness that filter caused.
+ROSTER_LIMIT = 24
+# Shorter fragments than this match too much to identify anybody.
+FRAGMENT_MIN = 3
 
 SELF_WORDS = frozenset(
     {"я", "меня", "мне", "себя", "себе", "мой", "моя", "моё", "мое", "self", "me"}
@@ -143,11 +148,18 @@ async def find(session: AsyncSession, needle: str, *, speaker_id: int | None = N
     for person in people:
         if person.full_name.casefold() == key or (person.alias or "").casefold() == key:
             return person
-    for person in people:
-        haystack = f"{person.full_name} {person.alias or ''} {person.username or ''}".casefold()
-        if key in haystack:
-            return person
-    return None
+    # Fragments last, and only when they point at exactly one person. Returning
+    # the first of several matches is how the bot ends up confidently filing a
+    # fact under the wrong participant, and a two-letter fragment matches half
+    # the chat - a refusal the model can act on beats a silent wrong guess.
+    if len(key) < FRAGMENT_MIN:
+        return None
+    matches = [
+        person
+        for person in people
+        if key in f"{person.full_name} {person.alias or ''} {person.username or ''}".casefold()
+    ]
+    return matches[0] if len(matches) == 1 else None
 
 
 async def roster(
@@ -157,13 +169,18 @@ async def roster(
     exclude: int | None = None,
     limit: int = ROSTER_LIMIT,
 ) -> list[ChatUser]:
-    """People the bot actually knows something about, most recently active first.
+    """Everyone the bot has seen in this chat, most recently active first.
 
-    Anyone it has only seen speak is left out: a list of bare names would cost
-    tokens in every prompt and tell the model nothing it can use.
+    People it knows nothing about are listed too, and that is the point. An
+    earlier version kept only those with learned facts, on the theory that bare
+    names cost tokens and say nothing - which had it exactly backwards. Telling
+    two participants apart *is* the job here, and a name with its @handle and id
+    does that on its own; facts are a bonus on top. In the live chat that filter
+    hid eight of the ten people in the room, so the model was left guessing who
+    said what.
     """
     stmt = select(ChatUser).order_by(ChatUser.last_seen.desc())
     if chat_id is not None:
         stmt = stmt.where((ChatUser.chat_id == chat_id) | (ChatUser.chat_id.is_(None)))
-    people = [p for p in await session.scalars(stmt) if p.is_known and p.tg_user_id != exclude]
+    people = [p for p in await session.scalars(stmt) if p.tg_user_id != exclude]
     return people[:limit]

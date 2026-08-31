@@ -13,7 +13,7 @@ import logging
 
 from pydantic_ai import Agent
 
-from hackbot.agent import prompts
+from hackbot.agent import lore, prompts
 from hackbot.agent.defaults import DEFAULT_BANTER, DEFAULT_PERSONA, SKIP_TOKEN
 from hackbot.agent.llm import LLMUnavailableError, chat_model, model_settings
 from hackbot.bot.recent import Line
@@ -49,11 +49,16 @@ async def make_banter(
     """One unprompted line, or None when the model would rather stay quiet."""
     if not lines:
         return None
+    # Lore matters more here than anywhere else: an unprompted line is judged
+    # entirely on whether it sounds like someone who belongs in this chat.
     instructions = "\n\n".join(
-        (
+        part
+        for part in (
             prompts.load("persona", DEFAULT_PERSONA),
+            lore.compact(),
             prompts.load("banter", DEFAULT_BANTER),
         )
+        if part
     )
     try:
         agent = Agent(

@@ -31,3 +31,9 @@ logs/
 Thumbs.db
 .idea/
 .vscode/
+
+# Лор чата: реальные имена, дни рождения и личные детали живых людей.
+# Репозиторий публичный, поэтому файлы едут на сервер отдельно, как ключи.
+prompts/lore.md
+prompts/lore_corpus.md
+prompts/lore_quotes.md

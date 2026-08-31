@@ -14,8 +14,13 @@ from hackbot.domain.enums import HackStatus, LinkKind
 from hackbot.domain.services import calsync
 from hackbot.domain.services.events import ensure_deadline_events, list_events
 from hackbot.domain.services.hackathons import (
+    delete as delete_hack,
+)
+from hackbot.domain.services.hackathons import (
     derive_status,
+    find_by_title,
     hack_tz,
+    list_hackathons,
     missing_fields,
     rebind_topic,
     remove_link,
@@ -336,3 +341,50 @@ async def cmd_bind(message: Message, command: CommandObject, bot: Bot) -> None:
         await rebind_topic(session, match, message.chat.id, topic_id(message))
         await refresh_card(bot, session, match, force_new=True)
         await message.reply(f"Привязал <b>{esc(match.title)}</b> к этой теме.")
+
+
+@router.message(Command("drop", "снести"))
+async def cmd_drop(message: Message, command: CommandObject, bot: Bot) -> None:
+    """Delete a hackathon the team changed its mind about, wherever it is.
+
+    Not scoped to the current topic: the thing you want gone is usually not the
+    thing you are standing in, and after `/hacks` shows the list the natural next
+    move is naming one. The title is required rather than a yes/no confirmation -
+    typing the name IS the confirmation, and this cascades to every stage,
+    reminder, link, document and roster entry the hackathon owns.
+    """
+    if not await require_editor(message, bot):
+        return
+
+    needle = (command.args or "").strip()
+    async with session_scope() as session:
+        if not needle:
+            hacks = await list_hackathons(session, chat_id=message.chat.id)
+            if not hacks:
+                await message.reply("В этом чате хакатонов нет.")
+                return
+            names = "\n".join(f"• <code>{esc(h.title)}</code>" for h in hacks)
+            await message.reply(
+                "Снести хакатон вместе со всеми этапами:\n"
+                "<code>/drop Название</code>\n\n" + names
+            )
+            return
+
+        hack, candidates = await find_by_title(session, message.chat.id, needle)
+        if hack is None:
+            if len(candidates) > 1:
+                names = "\n".join(f"• <code>{esc(h.title)}</code>" for h in candidates)
+                await message.reply(f"Под «{esc(needle)}» подходит несколько:\n{names}")
+            else:
+                await message.reply(f"Хакатона «{esc(needle)}» тут нет. Посмотри /hacks")
+            return
+
+        hack_id, title, events = hack.id, hack.title, len(hack.events)
+        await delete_hack(session, hack)
+
+    # After the row is gone, never before: until then the periodic sweep could
+    # write the very stages that are being removed straight back into Google.
+    wiped = await calsync.purge_hackathon(hack_id)
+    await message.reply(
+        f"🗑 Снёс «{esc(title)}»: этапов {events}, из календаря убрал {wiped}."
+    )

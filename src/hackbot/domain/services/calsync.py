@@ -203,6 +203,56 @@ async def push_all(session: AsyncSession) -> int:
     return total
 
 
+async def push_chat(session: AsyncSession, chat_id: int) -> list[tuple[Hackathon, int]]:
+    """Every hackathon of one chat, with what each of them wrote.
+
+    The calendar is shared across all of them, so "синхронизируй календарь" almost
+    never means the single hackathon whose topic you happen to be standing in -
+    and asked from General, where most of the conversation actually happens, a
+    topic-scoped sync finds nothing and refuses instead of doing the obvious job.
+
+    Finished hackathons are included here, unlike in the periodic sweep: this is
+    somebody asking on purpose, and "put the whole timeline in" means all of it.
+    """
+    if not gcal.enabled():
+        return []
+
+    out: list[tuple[Hackathon, int]] = []
+    for hack in await list_hackathons(session, chat_id=chat_id):
+        out.append((hack, await push_hackathon(session, hack)))
+    return out
+
+
+async def purge_hackathon(hack_id: int) -> int:
+    """Wipe a deleted hackathon out of the calendar.
+
+    Orphans are normally collected as a side effect of writing, so a hackathon
+    that no longer exists would never be visited again and its stages would sit
+    in the shared calendar forever - entries nobody can trace back to anything.
+    Takes the id rather than the row because by the time this runs the row is
+    usually gone.
+    """
+    if not gcal.enabled():
+        return 0
+
+    _dirty.discard(hack_id)
+    try:
+        remote = await gcal.list_event_ids(hack_id)
+    except gcal.GCalError as exc:
+        log.warning("calendar: cannot list hackathon %s to purge: %s", hack_id, exc.message)
+        return 0
+
+    removed = 0
+    for event_id in remote:
+        try:
+            await gcal.delete_event(event_id)
+        except gcal.GCalError as exc:
+            log.warning("calendar: cannot delete %s: %s", event_id, exc.message)
+        else:
+            removed += 1
+    return removed
+
+
 # ---------------------------------------------------------------- scheduling
 
 

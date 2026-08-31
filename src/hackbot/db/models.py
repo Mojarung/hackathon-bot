@@ -317,6 +317,17 @@ class ChatUser(Base):
         return "; ".join(bits)
 
     def summary(self) -> str:
-        """One line per person for the roster the agent is given."""
+        """One line about the person, for prompts that only need who they are."""
         facts = self.facts
         return f"{self.handle} — {facts}" if facts else self.handle
+
+    def roster_line(self) -> str:
+        """One line per person for the roster the agent reads on every run.
+
+        Spells out the telegram id because everything the bot remembers hangs off
+        it. A model that echoes back "Ярослав" sends `remember_person` hunting
+        through names; one that echoes the id cannot land on the wrong person.
+        """
+        facts = self.facts
+        head = f"{self.handle}, id {self.tg_user_id}"
+        return f"{head} — {facts}" if facts else head

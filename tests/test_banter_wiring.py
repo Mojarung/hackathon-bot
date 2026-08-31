@@ -102,12 +102,12 @@ def patch_everything(monkeypatch, *, reply: str | None = "влезаю", reactio
     return spoken, reacted
 
 
-def make_message(update_id: int, text: str, **extra) -> Update:
+def make_message(update_id: int, text: str, from_user: User | None = None, **extra) -> Update:
     message = Message(
         message_id=update_id,
         date=datetime.now(UTC),
         chat=Chat(id=CHAT_ID, type="supergroup"),
-        from_user=User(id=1, is_bot=False, first_name="Кирилл"),
+        from_user=from_user or User(id=1, is_bot=False, first_name="Кирилл"),
         message_thread_id=TOPIC_ID,
         is_topic_message=True,
         text=text,
@@ -244,3 +244,35 @@ async def test_the_escape_hatch_still_narrows_it_to_hackathon_topics(
     await dp.feed_update(bot, make_message(2, "второе сообщение, уже разговор"))
 
     assert not spoken, "с выключенным флагом молчит там, где нет хакатона"
+
+
+async def test_recorded_lines_carry_the_handle_not_just_a_name(bot, dp, monkeypatch) -> None:
+    """The buffer and the agent have to sign a line the same way.
+
+    The agent stamps «Имя (@ник): текст» onto its own turns, but the overheard
+    buffer used to record a bare display name. Two people sharing a first name -
+    or one whose Telegram name is punctuation, as happens in the live chat - then
+    become indistinguishable to the model exactly where it speaks unprompted.
+    """
+    patch_everything(monkeypatch)
+    recent.clear()
+
+    await dp.feed_update(bot, make_message(
+        901, "го обсудим архитектуру",
+        from_user=User(id=1, is_bot=False, first_name="Пётр", username="petrov"),
+    ))
+
+    lines = recent.tail(CHAT_ID, TOPIC_ID, 5)
+    assert [line.author for line in lines] == ["Пётр (@petrov)"]
+
+
+async def test_a_nameless_account_still_gets_something_to_go_on(bot, dp, monkeypatch) -> None:
+    patch_everything(monkeypatch)
+    recent.clear()
+
+    await dp.feed_update(bot, make_message(
+        902, "а я вообще без ника",
+        from_user=User(id=2, is_bot=False, first_name="Саня"),
+    ))
+
+    assert recent.tail(CHAT_ID, TOPIC_ID, 5)[0].author == "Саня"

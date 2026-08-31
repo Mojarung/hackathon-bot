@@ -72,16 +72,49 @@ async def test_find_by_nick_name_and_self(session) -> None:
     assert await people.find(session, "кого-то-нет") is None
 
 
-async def test_roster_skips_people_with_nothing_recorded(session) -> None:
-    await people.touch(session, tg_user_id=7, full_name="Кирилл", chat_id=-1)
+async def test_roster_lists_everyone_seen_not_only_the_studied(session) -> None:
+    """Telling participants apart is the whole job, and a bare name does that.
+
+    An earlier version listed only people with learned facts. In the live chat
+    that hid eight of ten participants from the model, which is exactly when it
+    starts attributing one person's words to another.
+    """
+    await people.touch(session, tg_user_id=7, username="kir", full_name="Кирилл", chat_id=-1)
     sanya = await people.touch(session, tg_user_id=8, full_name="Саня", chat_id=-1)
     await people.remember(session, sanya, about="фронтендер", traits="спокойный")
 
     listed = await people.roster(session, chat_id=-1)
-    assert [p.tg_user_id for p in listed] == [8]
-    assert listed[0].summary() == "Саня — фронтендер; характер: спокойный"
+    assert {p.tg_user_id for p in listed} == {7, 8}
 
-    assert await people.roster(session, chat_id=-1, exclude=8) == []
+    lines = {p.tg_user_id: p.roster_line() for p in listed}
+    assert lines[8] == "Саня, id 8 — фронтендер; характер: спокойный"
+    # Nothing learned yet, but the name, the handle and the id still identify him.
+    assert lines[7] == "Кирилл (@kir), id 7"
+
+
+async def test_roster_still_leaves_out_the_person_being_answered(session) -> None:
+    await people.touch(session, tg_user_id=7, full_name="Кирилл", chat_id=-1)
+    await people.touch(session, tg_user_id=8, full_name="Саня", chat_id=-1)
+
+    assert [p.tg_user_id for p in await people.roster(session, chat_id=-1, exclude=8)] == [7]
+
+
+async def test_an_ambiguous_fragment_resolves_to_nobody(session) -> None:
+    """Picking the first of several matches is how a fact lands on the wrong person."""
+    await people.touch(session, tg_user_id=7, full_name="Кирилл Иванов")
+    await people.touch(session, tg_user_id=8, full_name="Пётр Иванов")
+
+    assert await people.find(session, "иванов") is None      # оба подходят
+    assert (await people.find(session, "кирилл")).tg_user_id == 7
+    # An exact name still wins over the ambiguity guard.
+    assert (await people.find(session, "Пётр Иванов")).tg_user_id == 8
+
+
+async def test_a_fragment_too_short_to_mean_anything_is_refused(session) -> None:
+    await people.touch(session, tg_user_id=7, full_name="Кирилл")
+
+    assert await people.find(session, "ки") is None
+    assert (await people.find(session, "кир")).tg_user_id == 7
 
 
 async def test_forget_clears_facts_but_keeps_the_person(session) -> None:

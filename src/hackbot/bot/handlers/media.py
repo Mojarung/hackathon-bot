@@ -10,7 +10,7 @@ from aiogram.filters import Command, CommandObject
 from aiogram.types import BufferedInputFile, Message
 
 from hackbot.bot.cards import refresh_card
-from hackbot.bot.handlers._helpers import NO_HACK, find_hack, require_editor, require_hack
+from hackbot.bot.handlers._helpers import require_editor, require_hack
 from hackbot.bot.utils import collect_attachments, message_text
 from hackbot.config import get_settings
 from hackbot.db.base import session_scope
@@ -335,7 +335,13 @@ def _gcal_error_text(exc: gcal.GCalError) -> str:
 
 @router.message(Command("gcal", "гуглкалендарь"))
 async def cmd_gcal(message: Message, bot: Bot) -> None:
-    """Push this hackathon into the shared Google Calendar right now."""
+    """Push every hackathon of this chat into the shared Google Calendar.
+
+    Deliberately not scoped to the topic it was called from. One calendar holds
+    all of them, and the command is nearly always typed in General - where a
+    topic-scoped version found no hackathon and refused, which is exactly the
+    thing that looked broken.
+    """
     # Rights are checked before the setup hint, not after: that hint hands out
     # the service-account address, and with it the GCP project id.
     if not await require_editor(message, bot):
@@ -343,19 +349,12 @@ async def cmd_gcal(message: Message, bot: Bot) -> None:
     if not gcal.enabled():
         await message.reply(_gcal_setup_text(), disable_web_page_preview=True)
         return
-    async with session_scope() as session:
-        if await require_hack(session, message) is None:
-            return
 
     status = await message.reply("📅 Синхронизирую с Google Calendar…")
     try:
         calendar_name = await gcal.check()
         async with session_scope() as session:
-            hack = await find_hack(session, message)
-            if hack is None:
-                await status.edit_text(NO_HACK)
-                return
-            written = await calsync.push_hackathon(session, hack)
+            done = await calsync.push_chat(session, message.chat.id)
     except gcal.GCalError as exc:
         log.warning("google calendar refused: %s %s", exc.status, exc.message)
         await status.edit_text(_gcal_error_text(exc))
@@ -365,8 +364,14 @@ async def cmd_gcal(message: Message, bot: Bot) -> None:
         await status.edit_text("Не смог достучаться до Google Calendar. Попробуй ещё раз.")
         return
 
-    await status.edit_text(
-        f"📅 <b>{esc(calendar_name)}</b>\n"
-        f"Записал событий: {written}\n\n"
-        "<i>Дальше правки таймлайна доедут сами.</i>"
-    )
+    if not done:
+        await status.edit_text("В этом чате хакатонов ещё нет. Заводи: /new Название")
+        return
+
+    total = sum(written for _, written in done)
+    lines = [f"📅 <b>{esc(calendar_name)}</b>", f"Записал событий: {total}", ""]
+    lines += [
+        f"{hack.status.emoji} {esc(hack.title)} — {written}" for hack, written in done
+    ]
+    lines += ["", "<i>Дальше правки таймлайна доедут сами.</i>"]
+    await status.edit_text("\n".join(lines))

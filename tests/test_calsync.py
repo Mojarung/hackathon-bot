@@ -490,3 +490,71 @@ async def test_a_stage_created_mid_pass_is_not_mistaken_for_an_orphan(
     await calsync.push_hackathon(session, hack)
 
     assert google.deleted == [], "чужой свежий этап удалять нельзя"
+
+
+# ---------------------------------------------------------------- whole chat
+
+
+async def test_a_manual_sync_covers_every_hackathon_of_the_chat(session, monkeypatch) -> None:
+    """One calendar holds all of them, so «синхронизируй календарь» means all of them.
+
+    The command is nearly always typed in General, where no hackathon lives at
+    all - a topic-scoped sync there finds nothing and refuses, which is exactly
+    what looked broken from the outside.
+    """
+    first = await _stored_hackathon(session)
+    second = Hackathon(
+        slug="lct", title="ЛЦТ", year=2026, tz=TZ_NAME, chat_id=-100,
+        thread_id=9, status=HackStatus.FINISHED,
+        events=[Event(kind=EventKind.DEFENSE, title="Защита", starts_at=START)],
+    )
+    session.add(second)
+    await session.commit()
+    google = FakeGoogle()
+    google.install(monkeypatch)
+
+    done = await calsync.push_chat(session, -100)
+
+    assert {hack.title for hack, _ in done} == {"ТендерХак", "ЛЦТ"}
+    assert sum(written for _, written in done) == len(first.events) + 1
+    # Finished ones are swept over by the periodic pass, but a person asking on
+    # purpose means the whole list.
+    assert dict((h.title, n) for h, n in done)["ЛЦТ"] == 1
+
+
+async def test_a_chat_with_no_hackathons_reports_nothing_rather_than_failing(
+    session, monkeypatch
+) -> None:
+    FakeGoogle().install(monkeypatch)
+    assert await calsync.push_chat(session, -999) == []
+
+
+# ---------------------------------------------------------------- purge
+
+
+async def test_dropping_a_hackathon_clears_it_out_of_the_calendar(
+    session, monkeypatch, clean_dirty
+) -> None:
+    """Orphans are collected while writing, and a deleted hackathon is never written.
+
+    Without an explicit purge its stages would sit in the shared calendar for
+    good - entries nobody can trace back to anything that still exists.
+    """
+    hack = await _stored_hackathon(session)
+    remote = {calsync.gid(hack.id, e.id) for e in hack.events}
+    google = FakeGoogle(present=remote)
+    google.install(monkeypatch)
+    calsync.mark_dirty(hack.id)
+
+    removed = await calsync.purge_hackathon(hack.id)
+
+    assert removed == len(remote)
+    assert set(google.deleted) == remote
+    assert clean_dirty == set(), "снесённый хакатон не должен ждать своей очереди на запись"
+
+
+async def test_purge_does_nothing_when_the_calendar_is_off(session, monkeypatch) -> None:
+    monkeypatch.setattr(get_settings(), "google_calendar_id", "")
+    monkeypatch.setattr(aiohttp, "ClientSession", _no_network)
+
+    assert await calsync.purge_hackathon(7) == 0

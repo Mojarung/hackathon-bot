@@ -101,6 +101,41 @@ async def create(
     return hack
 
 
+async def find_by_title(
+    session: AsyncSession, chat_id: int, needle: str
+) -> tuple[Hackathon | None, list[Hackathon]]:
+    """Resolve a hackathon the way a person names it, out loud and approximately.
+
+    Returns the single match and the candidates it came from, so the caller can
+    tell "no such hackathon" from "which of these three did you mean" - dropping
+    a hackathon is not the place to silently pick the first plausible row.
+    """
+    needle = (needle or "").strip().casefold()
+    if not needle:
+        return None, []
+    hacks = await list_hackathons(session, chat_id=chat_id)
+
+    exact = [h for h in hacks if h.title.casefold() == needle or h.slug.casefold() == needle]
+    if len(exact) == 1:
+        return exact[0], exact
+    partial = [h for h in hacks if needle in h.title.casefold()]
+    if len(partial) == 1:
+        return partial[0], partial
+    return None, partial or exact
+
+
+async def delete(session: AsyncSession, hack: Hackathon) -> None:
+    """Drop a hackathon and everything hanging off it.
+
+    Every child relationship cascades, so stages, reminders, links, docs and the
+    roster go with it. Clearing the calendar is deliberately NOT done here: the
+    row has to be gone before anything asks Google what is left, and the service
+    layer has no business knowing about the calendar at all.
+    """
+    await session.delete(hack)
+    await session.flush()
+
+
 async def update_fields(
     session: AsyncSession, hack: Hackathon, fields: dict[str, Any]
 ) -> dict[str, tuple[Any, Any]]:
